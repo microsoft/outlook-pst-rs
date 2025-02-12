@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "crates/pst",
+]
+resolver = "2"
+
+[workspace.package]
+authors = [ "Microsoft" ]
+edition = "2021"
+rust-version = "1.76"
+repository = "https://github.com/microsoft/outlook-pst-rs"
+license = "MIT"
+keywords = [ "win32", "outlook", "mapi" ]
+categories = [ "os::windows-apis" ]
+
+[workspace.dependencies]
+byteorder = "1"
+thiserror = "2"
