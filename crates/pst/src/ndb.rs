@@ -67,6 +67,7 @@ pub type NdbResult<T> = Result<T, NdbError>;
 /// ### See also
 /// [NodeId]
 #[repr(u8)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum NodeIdType {
     /// `NID_TYPE_HID`: Heap node
     HeapNode = 0x00,
@@ -143,6 +144,7 @@ impl TryFrom<u8> for NodeIdType {
 pub const MAX_NODE_INDEX: u32 = 1_u32.rotate_right(5) - 1;
 
 /// [NID (Node ID)](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/18d7644e-cb33-4e11-95c0-34d8a84fbff6)
+#[derive(Clone, Copy, Debug)]
 pub struct NodeId(u32);
 
 impl NodeId {
@@ -192,6 +194,7 @@ pub trait BlockId: Sized {
 
 pub const MAX_UNICODE_BLOCK_INDEX: u64 = 1_u64.rotate_right(2) - 1;
 
+#[derive(Clone, Copy, Debug)]
 pub struct UnicodeBlockId(u64);
 
 impl BlockId for UnicodeBlockId {
@@ -228,6 +231,7 @@ impl BlockId for UnicodeBlockId {
 
 pub const MAX_ANSI_BLOCK_INDEX: u32 = 1_u32.rotate_right(2) - 1;
 
+#[derive(Clone, Copy, Debug)]
 pub struct AnsiBlockId(u32);
 
 impl BlockId for AnsiBlockId {
@@ -272,6 +276,7 @@ pub trait ByteIndex: Sized {
     fn index(&self) -> Self::Index;
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct UnicodeByteIndex(u64);
 
 impl ByteIndex for UnicodeByteIndex {
@@ -295,6 +300,7 @@ impl ByteIndex for UnicodeByteIndex {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct AnsiByteIndex(u32);
 
 impl ByteIndex for AnsiByteIndex {
@@ -339,6 +345,7 @@ pub trait BlockRef: Sized {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct UnicodeBlockRef {
     block: UnicodeBlockId,
     index: UnicodeByteIndex,
@@ -361,6 +368,7 @@ impl BlockRef for UnicodeBlockRef {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct AnsiBlockRef {
     block: AnsiBlockId,
     index: AnsiByteIndex,
@@ -388,7 +396,7 @@ impl BlockRef for AnsiBlockRef {
 /// ### See also
 /// [Root]
 #[repr(u8)]
-#[derive(Copy, Clone, PartialEq, Eq, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
 pub enum AmapStatus {
     /// `INVALID_AMAP`: One or more AMaps in the PST are INVALID
     #[default]
@@ -678,7 +686,7 @@ const HEADER_MAGIC_CLIENT: u16 = u16::from_be_bytes(*b"MS");
 /// ### See also
 /// [Header]
 #[repr(u16)]
-#[derive(Copy, Clone, PartialEq, Eq, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
 pub enum NdbVersion {
     Ansi = 15,
     #[default]
@@ -741,7 +749,7 @@ const NDB_SENTINEL: u8 = 0x80;
 /// ### See also
 /// [Header]
 #[repr(u8)]
-#[derive(Copy, Clone, PartialEq, Eq, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
 pub enum NdbCryptMethod {
     /// `NDB_CRYPT_NONE`: Data blocks are not encoded
     #[default]
@@ -772,7 +780,7 @@ pub trait Header: Sized {
     type Root: Root;
 
     fn new(root: Self::Root, crypt_method: NdbCryptMethod) -> Self;
-    fn version() -> NdbVersion;
+    fn version(&self) -> NdbVersion;
     fn root(&self) -> &Self::Root;
     fn root_mut(&mut self) -> &mut Self::Root;
 }
@@ -809,7 +817,7 @@ impl Header for UnicodeHeader {
         }
     }
 
-    fn version() -> NdbVersion {
+    fn version(&self) -> NdbVersion {
         NdbVersion::Unicode
     }
 
@@ -866,19 +874,19 @@ impl UnicodeHeader {
         cursor.seek(SeekFrom::Start(4))?;
 
         // wVerClient
-        let version = f.read_u16::<LittleEndian>()?;
+        let version = cursor.read_u16::<LittleEndian>()?;
         if version != NDB_CLIENT_VERSION {
             return Err(NdbError::InvalidNdbHeaderClientVersion(version).into());
         }
 
         // bPlatformCreate
-        let platform_create = f.read_u8()?;
+        let platform_create = cursor.read_u8()?;
         if platform_create != NDB_PLATFORM_CREATE {
             return Err(NdbError::InvalidNdbHeaderPlatformCreate(platform_create).into());
         }
 
         // bPlatformAccess
-        let platform_access = f.read_u8()?;
+        let platform_access = cursor.read_u8()?;
         if platform_access != NDB_PLATFORM_ACCESS {
             return Err(NdbError::InvalidNdbHeaderPlatformAccess(platform_access).into());
         }
@@ -907,7 +915,7 @@ impl UnicodeHeader {
         // qwUnused
         {
             let unused = cursor.read_u64::<LittleEndian>()?;
-            if cursor.read_u64::<LittleEndian>()? != 0 {
+            if unused != 0 {
                 return Err(NdbError::InvalidNdbHeaderUnusedValue(unused).into());
             }
         }
@@ -1057,7 +1065,7 @@ impl Header for AnsiHeader {
         }
     }
 
-    fn version() -> NdbVersion {
+    fn version(&self) -> NdbVersion {
         NdbVersion::Ansi
     }
 
@@ -1102,19 +1110,19 @@ impl AnsiHeader {
         }
 
         // wVerClient
-        let version = f.read_u16::<LittleEndian>()?;
+        let version = cursor.read_u16::<LittleEndian>()?;
         if version != NDB_CLIENT_VERSION {
             return Err(NdbError::InvalidNdbHeaderClientVersion(version).into());
         }
 
         // bPlatformCreate
-        let platform_create = f.read_u8()?;
+        let platform_create = cursor.read_u8()?;
         if platform_create != NDB_PLATFORM_CREATE {
             return Err(NdbError::InvalidNdbHeaderPlatformCreate(platform_create).into());
         }
 
         // bPlatformAccess
-        let platform_access = f.read_u8()?;
+        let platform_access = cursor.read_u8()?;
         if platform_access != NDB_PLATFORM_ACCESS {
             return Err(NdbError::InvalidNdbHeaderPlatformAccess(platform_access).into());
         }

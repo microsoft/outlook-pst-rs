@@ -14,5 +14,6 @@ keywords = [ "win32", "outlook", "mapi" ]
 categories = [ "os::windows-apis" ]
 
 [workspace.dependencies]
+anyhow = "1"
 byteorder = "1"
 thiserror = "2"

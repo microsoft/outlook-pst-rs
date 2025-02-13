@@ -13,3 +13,6 @@ categories.workspace = true
 [dependencies]
 byteorder.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
