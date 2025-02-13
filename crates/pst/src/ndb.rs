@@ -3,10 +3,11 @@
 #![allow(dead_code)]
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use core::mem;
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use thiserror::Error;
 
-use crate::crc::compute_crc;
+use crate::{block_sig::compute_sig, crc::compute_crc};
 
 #[derive(Error, Debug)]
 pub enum NdbError {
@@ -52,6 +53,14 @@ pub enum NdbError {
     UnicodePstVersion(u16),
     #[error("Invalid HEADER rgbReserved, ullReserved, dwReserved")]
     InvalidNdbHeaderAnsiReservedBytes,
+    #[error("Mismatch between PAGETRAILER ptype and ptypeRepeat: (0x{0:0X}, 0x{1:0X})")]
+    MismatchPageTypeRepeat(u8, u8),
+    #[error("Invalid PAGETRAILER ptype: 0x{0:0X}")]
+    InvalidPageType(u8),
+    #[error("Invalid PAGETRAILER ptype: {0:?}")]
+    UnexpectedPageType(PageType),
+    #[error("Invalid ANSI map page dwPadding: 0x{0:0X}")]
+    InvalidAnsiMapPagePadding(u32),
 }
 
 impl From<NdbError> for io::Error {
@@ -1249,6 +1258,321 @@ impl AnsiHeader {
         f.write_all(&self.reserved3)
     }
 }
+
+/// `ptype`
+///
+/// ### See also
+/// [PageTrailer]
+#[repr(u8)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum PageType {
+    /// `ptypeBBT`: Block BTree page
+    BlockBTree = 0x80,
+    /// `ptypeNBT`: Node BTree page
+    NodeBTree = 0x81,
+    /// `ptypeFMap`: Free Map page
+    FreeMap = 0x82,
+    /// `ptypePMap`: Allocation Page Map page
+    AllocationPageMap = 0x83,
+    /// `ptypeAMap`: Allocation Map page
+    AllocationMap = 0x84,
+    /// `ptypeFPMap`: Free Page Map page
+    FreePageMap = 0x85,
+    /// `ptypeDL`: Density List page
+    DensityList = 0x86,
+}
+
+impl TryFrom<u8> for PageType {
+    type Error = NdbError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x80 => Ok(PageType::BlockBTree),
+            0x81 => Ok(PageType::NodeBTree),
+            0x82 => Ok(PageType::FreeMap),
+            0x83 => Ok(PageType::AllocationPageMap),
+            0x84 => Ok(PageType::AllocationMap),
+            0x85 => Ok(PageType::FreePageMap),
+            0x86 => Ok(PageType::DensityList),
+            _ => Err(NdbError::InvalidPageType(value)),
+        }
+    }
+}
+
+impl PageType {
+    pub fn signature(&self, index: u32, block_id: u32) -> u16 {
+        match self {
+            PageType::BlockBTree | PageType::NodeBTree | PageType::DensityList => {
+                compute_sig(index, block_id)
+            }
+            _ => 0,
+        }
+    }
+}
+
+/// [PAGETRAILER](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/f4ccb38a-930a-4db4-98df-a69c195926ba)
+pub trait PageTrailer: Sized {
+    type BlockId: BlockId;
+
+    fn new(page_type: PageType, signature: u16, block_id: Self::BlockId, crc: u32) -> Self;
+    fn read(f: &mut dyn Read) -> io::Result<Self>;
+    fn write(&self, f: &mut dyn Write) -> io::Result<()>;
+    fn page_type(&self) -> PageType;
+    fn signature(&self) -> u16;
+    fn crc(&self) -> u32;
+    fn block_id(&self) -> &Self::BlockId;
+}
+
+pub struct UnicodePageTrailer {
+    page_type: PageType,
+    signature: u16,
+    crc: u32,
+    block_id: UnicodeBlockId,
+}
+
+impl PageTrailer for UnicodePageTrailer {
+    type BlockId = UnicodeBlockId;
+
+    fn new(page_type: PageType, signature: u16, block_id: UnicodeBlockId, crc: u32) -> Self {
+        Self {
+            page_type,
+            block_id,
+            signature,
+            crc,
+        }
+    }
+
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let mut page_type = [0_u8; 2];
+        f.read_exact(&mut page_type)?;
+        if page_type[0] != page_type[1] {
+            return Err(NdbError::MismatchPageTypeRepeat(page_type[0], page_type[1]).into());
+        }
+        let page_type = PageType::try_from(page_type[0])?;
+        let signature = f.read_u16::<LittleEndian>()?;
+        let crc = f.read_u32::<LittleEndian>()?;
+        let block_id = UnicodeBlockId::read(f)?;
+
+        Ok(Self {
+            page_type,
+            signature,
+            crc,
+            block_id,
+        })
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        f.write_all(&[self.page_type as u8; 2])?;
+        f.write_u16::<LittleEndian>(self.signature)?;
+        f.write_u32::<LittleEndian>(self.crc)?;
+        self.block_id.write(f)
+    }
+
+    fn page_type(&self) -> PageType {
+        self.page_type
+    }
+
+    fn signature(&self) -> u16 {
+        self.signature
+    }
+
+    fn crc(&self) -> u32 {
+        self.crc
+    }
+
+    fn block_id(&self) -> &UnicodeBlockId {
+        &self.block_id
+    }
+}
+
+pub struct AnsiPageTrailer {
+    page_type: PageType,
+    signature: u16,
+    block_id: AnsiBlockId,
+    crc: u32,
+}
+
+impl PageTrailer for AnsiPageTrailer {
+    type BlockId = AnsiBlockId;
+
+    fn new(page_type: PageType, signature: u16, block_id: AnsiBlockId, crc: u32) -> Self {
+        Self {
+            page_type,
+            crc,
+            block_id,
+            signature,
+        }
+    }
+
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let mut page_type = [0_u8; 2];
+        f.read_exact(&mut page_type)?;
+        if page_type[0] != page_type[1] {
+            return Err(NdbError::MismatchPageTypeRepeat(page_type[0], page_type[1]).into());
+        }
+        let page_type = PageType::try_from(page_type[0])?;
+        let signature = f.read_u16::<LittleEndian>()?;
+        let block_id = AnsiBlockId::read(f)?;
+        let crc = f.read_u32::<LittleEndian>()?;
+
+        Ok(Self {
+            page_type,
+            signature,
+            block_id,
+            crc,
+        })
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        f.write_all(&[self.page_type as u8; 2])?;
+        f.write_u16::<LittleEndian>(self.signature)?;
+        self.block_id.write(f)?;
+        f.write_u32::<LittleEndian>(self.crc)
+    }
+
+    fn page_type(&self) -> PageType {
+        self.page_type
+    }
+
+    fn signature(&self) -> u16 {
+        self.signature
+    }
+
+    fn crc(&self) -> u32 {
+        self.crc
+    }
+
+    fn block_id(&self) -> &AnsiBlockId {
+        &self.block_id
+    }
+}
+
+pub type MapBits = [u8; 496];
+
+pub trait MapPage: Sized {
+    type Trailer: PageTrailer;
+    const PAGE_TYPE: u8;
+
+    fn new(amap_bits: MapBits, trailer: Self::Trailer) -> NdbResult<Self>;
+    fn read(f: &mut dyn Read) -> io::Result<Self>;
+    fn write(&self, f: &mut dyn Write) -> io::Result<()>;
+    fn map_bits(&self) -> &MapBits;
+    fn trailer(&self) -> &Self::Trailer;
+}
+
+pub struct UnicodeMapPage<const P: u8> {
+    map_bits: MapBits,
+    trailer: UnicodePageTrailer,
+}
+
+impl<const P: u8> MapPage for UnicodeMapPage<P> {
+    type Trailer = UnicodePageTrailer;
+    const PAGE_TYPE: u8 = P;
+
+    fn new(map_bits: MapBits, trailer: UnicodePageTrailer) -> NdbResult<Self> {
+        if trailer.page_type() as u8 != Self::PAGE_TYPE {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()));
+        }
+        Ok(Self { map_bits, trailer })
+    }
+
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let mut amap_bits = [0_u8; mem::size_of::<MapBits>()];
+        f.read_exact(&mut amap_bits)?;
+        let trailer = UnicodePageTrailer::read(f)?;
+        if trailer.page_type() as u8 != Self::PAGE_TYPE {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
+        }
+        Ok(Self {
+            map_bits: amap_bits,
+            trailer,
+        })
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        f.write_all(&self.map_bits)?;
+        self.trailer.write(f)
+    }
+
+    fn map_bits(&self) -> &MapBits {
+        &self.map_bits
+    }
+
+    fn trailer(&self) -> &UnicodePageTrailer {
+        &self.trailer
+    }
+}
+
+/// [AMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/43d8f556-2c0e-4976-8ec7-84e57f8b1234)
+pub type UnicodeAllocationMapPage = UnicodeMapPage<{ PageType::AllocationMap as u8 }>;
+/// [PMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/7e64a91f-cbd1-4a11-90c9-df5789e7d9a1)
+pub type UnicodeAllocationPageMapPage = UnicodeMapPage<{ PageType::AllocationPageMap as u8 }>;
+/// [FMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/26273ead-797e-4ea6-9b3c-9b9a5c581115)
+pub type UnicodeFreeMapPage = UnicodeMapPage<{ PageType::FreeMap as u8 }>;
+/// [FPMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/913a72b0-83f6-4c29-8b0b-40967579a534)
+pub type UnicodeFreePageMapPage = UnicodeMapPage<{ PageType::FreePageMap as u8 }>;
+
+pub struct AnsiMapPage<const P: u8> {
+    map_bits: MapBits,
+    trailer: AnsiPageTrailer,
+}
+
+impl<const P: u8> MapPage for AnsiMapPage<P> {
+    type Trailer = AnsiPageTrailer;
+    const PAGE_TYPE: u8 = P;
+
+    fn new(amap_bits: MapBits, trailer: AnsiPageTrailer) -> NdbResult<Self> {
+        if trailer.page_type() as u8 != Self::PAGE_TYPE {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()));
+        }
+        Ok(Self {
+            map_bits: amap_bits,
+            trailer,
+        })
+    }
+
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let padding = f.read_u32::<LittleEndian>()?;
+        if padding != 0 {
+            return Err(NdbError::InvalidAnsiMapPagePadding(padding).into());
+        }
+
+        let mut amap_bits = [0_u8; mem::size_of::<MapBits>()];
+        f.read_exact(&mut amap_bits)?;
+        let trailer = AnsiPageTrailer::read(f)?;
+        if trailer.page_type() as u8 != Self::PAGE_TYPE {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
+        }
+
+        Ok(Self {
+            map_bits: amap_bits,
+            trailer,
+        })
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        f.write_u32::<LittleEndian>(0)?;
+        f.write_all(&self.map_bits)?;
+        self.trailer.write(f)
+    }
+
+    fn map_bits(&self) -> &MapBits {
+        &self.map_bits
+    }
+
+    fn trailer(&self) -> &AnsiPageTrailer {
+        &self.trailer
+    }
+}
+
+/// [AMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/43d8f556-2c0e-4976-8ec7-84e57f8b1234)
+pub type AnsiAllocationMapPage = AnsiMapPage<{ PageType::AllocationMap as u8 }>;
+/// [PMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/7e64a91f-cbd1-4a11-90c9-df5789e7d9a1)
+pub type AnsiAllocationPageMapPage = AnsiMapPage<{ PageType::AllocationPageMap as u8 }>;
+/// [FMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/26273ead-797e-4ea6-9b3c-9b9a5c581115)
+pub type AnsiFreeMapPage = AnsiMapPage<{ PageType::FreeMap as u8 }>;
+/// [FPMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/913a72b0-83f6-4c29-8b0b-40967579a534)
+pub type AnsiFreePageMapPage = AnsiMapPage<{ PageType::FreePageMap as u8 }>;
 
 #[cfg(test)]
 mod tests {
