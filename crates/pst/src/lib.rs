@@ -18,16 +18,21 @@ mod crc;
 pub struct PstFile {
     file: Mutex<File>,
     header: ndb::UnicodeHeader,
+    density_list: io::Result<ndb::UnicodeDensityListPage>,
 }
 
 impl PstFile {
     pub fn read(path: impl AsRef<Path>) -> io::Result<Self> {
+        use ndb::DensityListPage;
+
         let mut file = File::open(path)?;
         file.seek(SeekFrom::Start(0))?;
         let header = ndb::UnicodeHeader::read(&mut file)?;
+        let density_list = ndb::UnicodeDensityListPage::read(&mut file);
         Ok(Self {
             file: Mutex::new(file),
             header,
+            density_list,
         })
     }
 
@@ -37,5 +42,9 @@ impl PstFile {
 
     pub fn header(&self) -> &ndb::UnicodeHeader {
         &self.header
+    }
+
+    pub fn density_list(&self) -> &io::Result<ndb::UnicodeDensityListPage> {
+        &self.density_list
     }
 }

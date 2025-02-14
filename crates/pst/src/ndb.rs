@@ -11,61 +11,63 @@ use crate::{block_sig::compute_sig, crc::compute_crc};
 
 #[derive(Error, Debug)]
 pub enum NdbError {
-    #[error("Invalid nidType: 0x{0:0X}")]
+    #[error("Invalid nidType: 0x{0:02X}")]
     InvalidNodeIdType(u8),
-    #[error("Invalid nidIndex: 0x{0:0X}")]
+    #[error("Invalid nidIndex: 0x{0:08X}")]
     InvalidNodeIndex(u32),
-    #[error("Invalid bidIndex: 0x{0:0X}")]
+    #[error("Invalid bidIndex: 0x{0:016X}")]
     InvalidUnicodeBlockIndex(u64),
-    #[error("Invalid bidIndex: 0x{0:0X}")]
+    #[error("Invalid bidIndex: 0x{0:08X}")]
     InvalidAnsiBlockIndex(u32),
-    #[error("Invalid ROOT fAMapValid: 0x{0:0X}")]
+    #[error("Invalid ROOT fAMapValid: 0x{0:02X}")]
     InvalidAmapStatus(u8),
-    #[error("Invalid HEADER wVer: 0x{0:0X}")]
+    #[error("Invalid HEADER wVer: 0x{0:04X}")]
     InvalidNdbVersion(u16),
-    #[error("Invalid HEADER bCryptMethod: 0x{0:0X}")]
+    #[error("Invalid HEADER bCryptMethod: 0x{0:02X}")]
     InvalidNdbCryptMethod(u8),
-    #[error("Invalid HEADER dwMagic: 0x{0:0X}")]
+    #[error("Invalid HEADER dwMagic: 0x{0:08X}")]
     InvalidNdbHeaderMagicValue(u32),
-    #[error("Invalid HEADER dwCRCPartial: 0x{0:0X}")]
+    #[error("Invalid HEADER dwCRCPartial: 0x{0:08X}")]
     InvalidNdbHeaderPartialCrc(u32),
-    #[error("Invalid HEADER wMagicClient: 0x{0:0X}")]
+    #[error("Invalid HEADER wMagicClient: 0x{0:04X}")]
     InvalidNdbHeaderMagicClientValue(u16),
-    #[error("Invalid HEADER dwCRCFull: 0x{0:0X}")]
+    #[error("Invalid HEADER dwCRCFull: 0x{0:08X}")]
     InvalidNdbHeaderFullCrc(u32),
-    #[error("ANSI PST version: 0x{0:0X}")]
+    #[error("ANSI PST version: 0x{0:04X}")]
     AnsiPstVersion(u16),
-    #[error("Invalid HEADER wVerClient: 0x{0:0X}")]
+    #[error("Invalid HEADER wVerClient: 0x{0:04X}")]
     InvalidNdbHeaderClientVersion(u16),
-    #[error("Invalid HEADER bPlatformCreate: 0x{0:0X}")]
+    #[error("Invalid HEADER bPlatformCreate: 0x{0:02X}")]
     InvalidNdbHeaderPlatformCreate(u8),
-    #[error("Invalid HEADER bPlatformAccess: 0x{0:0X}")]
+    #[error("Invalid HEADER bPlatformAccess: 0x{0:02X}")]
     InvalidNdbHeaderPlatformAccess(u8),
-    #[error("Invalid HEADER qwUnused: 0x{0:0X}")]
+    #[error("Invalid HEADER qwUnused: 0x{0:016X}")]
     InvalidNdbHeaderUnusedValue(u64),
-    #[error("Invalid HEADER dwAlign: 0x{0:0X}")]
+    #[error("Invalid HEADER dwAlign: 0x{0:08X}")]
     InvalidNdbHeaderAlignValue(u32),
-    #[error("Invalid HEADER bSentinel: 0x{0:0X}")]
+    #[error("Invalid HEADER bSentinel: 0x{0:02X}")]
     InvalidNdbHeaderSentinelValue(u8),
-    #[error("Invalid HEADER rgbReserved: 0x{0:0X}")]
+    #[error("Invalid HEADER rgbReserved: 0x{0:04X}")]
     InvalidNdbHeaderReservedValue(u16),
-    #[error("Unicode PST version: 0x{0:0X}")]
+    #[error("Unicode PST version: 0x{0:04X}")]
     UnicodePstVersion(u16),
     #[error("Invalid HEADER rgbReserved, ullReserved, dwReserved")]
     InvalidNdbHeaderAnsiReservedBytes,
-    #[error("Mismatch between PAGETRAILER ptype and ptypeRepeat: (0x{0:0X}, 0x{1:0X})")]
+    #[error("Mismatch between PAGETRAILER ptype and ptypeRepeat: (0x{0:02X}, 0x{1:02X})")]
     MismatchPageTypeRepeat(u8, u8),
-    #[error("Invalid PAGETRAILER ptype: 0x{0:0X}")]
+    #[error("Invalid PAGETRAILER ptype: 0x{0:02X}")]
     InvalidPageType(u8),
     #[error("Invalid PAGETRAILER ptype: {0:?}")]
     UnexpectedPageType(PageType),
-    #[error("Invalid ANSI map page dwPadding: 0x{0:0X}")]
+    #[error("Invalid PAGETRAILER dwCRC: 0x{0:08X}")]
+    InvalidPageCrc(u32),
+    #[error("Invalid ANSI map page dwPadding: 0x{0:08X}")]
     InvalidAnsiMapPagePadding(u32),
-    #[error("Invalid DLISTPAGEENT dwPageNum: 0x{0:0X}")]
+    #[error("Invalid DLISTPAGEENT dwPageNum: 0x{0:08X}")]
     InvalidDensityListEntryPageNumber(u32),
-    #[error("Invalid DLISTPAGEENT dwFreeSlots: 0x{0:0X}")]
+    #[error("Invalid DLISTPAGEENT dwFreeSlots: 0x{0:04X}")]
     InvalidDensityListEntryFreeSlots(u16),
-    #[error("Invalid DLISTPAGE cbEntDList: 0x{0:0X}")]
+    #[error("Invalid DLISTPAGE cbEntDList: 0x{0:016X}")]
     InvalidDensityListEntryCount(usize),
     #[error("Invalid DLISTPAGE rgPadding")]
     InvalidDensityListPadding,
@@ -199,7 +201,7 @@ impl NodeId {
 }
 
 /// [BID (Block ID)](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/d3155aa1-ccdd-4dee-a0a9-5363ccca5352)
-pub trait BlockId: Sized {
+pub trait BlockId: Sized + Copy {
     type Index: Copy;
 
     fn new(is_internal: bool, index: Self::Index) -> NdbResult<Self>;
@@ -1328,7 +1330,7 @@ pub trait PageTrailer: Sized {
     fn page_type(&self) -> PageType;
     fn signature(&self) -> u16;
     fn crc(&self) -> u32;
-    fn block_id(&self) -> &Self::BlockId;
+    fn block_id(&self) -> Self::BlockId;
 }
 
 pub struct UnicodePageTrailer {
@@ -1388,8 +1390,8 @@ impl PageTrailer for UnicodePageTrailer {
         self.crc
     }
 
-    fn block_id(&self) -> &UnicodeBlockId {
-        &self.block_id
+    fn block_id(&self) -> UnicodeBlockId {
+        self.block_id
     }
 }
 
@@ -1450,8 +1452,8 @@ impl PageTrailer for AnsiPageTrailer {
         self.crc
     }
 
-    fn block_id(&self) -> &AnsiBlockId {
-        &self.block_id
+    fn block_id(&self) -> AnsiBlockId {
+        self.block_id
     }
 }
 
@@ -1485,21 +1487,31 @@ impl<const P: u8> MapPage for UnicodeMapPage<P> {
     }
 
     fn read(f: &mut dyn Read) -> io::Result<Self> {
-        let mut amap_bits = [0_u8; mem::size_of::<MapBits>()];
-        f.read_exact(&mut amap_bits)?;
+        let mut map_bits = [0_u8; mem::size_of::<MapBits>()];
+        f.read_exact(&mut map_bits)?;
+
         let trailer = UnicodePageTrailer::read(f)?;
         if trailer.page_type() as u8 != Self::PAGE_TYPE {
             return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
         }
-        Ok(Self {
-            map_bits: amap_bits,
-            trailer,
-        })
+
+        let crc = compute_crc(0, &map_bits);
+        if crc != trailer.crc() {
+            return Err(NdbError::InvalidPageCrc(crc).into());
+        }
+
+        Ok(Self { map_bits, trailer })
     }
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         f.write_all(&self.map_bits)?;
-        self.trailer.write(f)
+
+        let crc = compute_crc(0, &self.map_bits);
+        let trailer = UnicodePageTrailer {
+            crc,
+            ..self.trailer
+        };
+        trailer.write(f)
     }
 
     fn map_bits(&self) -> &MapBits {
@@ -1540,28 +1552,49 @@ impl<const P: u8> MapPage for AnsiMapPage<P> {
     }
 
     fn read(f: &mut dyn Read) -> io::Result<Self> {
-        let padding = f.read_u32::<LittleEndian>()?;
+        let mut buffer = [0_u8; 500];
+        f.read_exact(&mut buffer)?;
+        let mut cursor = Cursor::new(buffer);
+
+        let padding = cursor.read_u32::<LittleEndian>()?;
         if padding != 0 {
             return Err(NdbError::InvalidAnsiMapPagePadding(padding).into());
         }
 
-        let mut amap_bits = [0_u8; mem::size_of::<MapBits>()];
-        f.read_exact(&mut amap_bits)?;
+        let mut map_bits = [0_u8; mem::size_of::<MapBits>()];
+        cursor.read_exact(&mut map_bits)?;
+
+        let buffer = cursor.into_inner();
+
         let trailer = AnsiPageTrailer::read(f)?;
         if trailer.page_type() as u8 != Self::PAGE_TYPE {
             return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
         }
 
-        Ok(Self {
-            map_bits: amap_bits,
-            trailer,
-        })
+        let crc = compute_crc(0, &buffer);
+        if crc != trailer.crc() {
+            return Err(NdbError::InvalidPageCrc(crc).into());
+        }
+
+        Ok(Self { map_bits, trailer })
     }
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
-        f.write_u32::<LittleEndian>(0)?;
-        f.write_all(&self.map_bits)?;
-        self.trailer.write(f)
+        let mut cursor = Cursor::new([0_u8; 500]);
+
+        cursor.write_u32::<LittleEndian>(0)?;
+        cursor.write_all(&self.map_bits)?;
+
+        let buffer = cursor.into_inner();
+        let crc = compute_crc(0, &buffer);
+
+        f.write_all(&buffer)?;
+
+        let trailer = AnsiPageTrailer {
+            crc,
+            ..self.trailer
+        };
+        trailer.write(f)
     }
 
     fn map_bits(&self) -> &MapBits {
@@ -1618,6 +1651,9 @@ impl DensityListPageEntry {
     }
 }
 
+const DENSITY_LIST_FILE_OFFSET: u32 = 0x4200;
+
+/// [DLISTPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/5d426b2d-ec10-4614-b768-46813652d5e3)
 pub trait DensityListPage: Sized {
     type Trailer: PageTrailer;
 
@@ -1628,7 +1664,7 @@ pub trait DensityListPage: Sized {
         trailer: Self::Trailer,
     ) -> NdbResult<Self>;
     fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self>;
-    fn write(&self, f: &mut dyn Write) -> io::Result<()>;
+    fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()>;
     fn backfill_complete(&self) -> bool;
     fn current_page(&self) -> u32;
     fn entries(&self) -> &[DensityListPageEntry];
@@ -1678,44 +1714,57 @@ impl DensityListPage for UnicodeDensityListPage {
     }
 
     fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self> {
+        f.seek(SeekFrom::Start(DENSITY_LIST_FILE_OFFSET as u64))?;
+
+        let mut buffer = [0_u8; 496];
+        f.read_exact(&mut buffer)?;
+        let mut cursor = Cursor::new(buffer);
+
         // bFlags
-        let backfill_complete = f.read_u8()? & 0x01 != 0;
+        let backfill_complete = cursor.read_u8()? & 0x01 != 0;
 
         // cEntDList
-        let entry_count = f.read_u8()?;
+        let entry_count = cursor.read_u8()?;
         if entry_count > MAX_UNICODE_DENSITY_LIST_ENTRY_COUNT as u8 {
             return Err(NdbError::InvalidDensityListEntryCount(entry_count as usize).into());
         }
 
         // wPadding
-        if f.read_u16::<LittleEndian>()? != 0 {
+        if cursor.read_u16::<LittleEndian>()? != 0 {
             return Err(NdbError::InvalidDensityListPadding.into());
         }
 
         // ulCurrentPage
-        let current_page = f.read_u32::<LittleEndian>()?;
+        let current_page = cursor.read_u32::<LittleEndian>()?;
 
         // rgDListPageEnt
         let mut entries = [DensityListPageEntry(0); MAX_UNICODE_DENSITY_LIST_ENTRY_COUNT];
         for entry in entries.iter_mut().take(entry_count as usize) {
-            *entry = DensityListPageEntry::read(f)?;
+            *entry = DensityListPageEntry::read(&mut cursor)?;
         }
-        f.seek(SeekFrom::Current(
+        cursor.seek(SeekFrom::Current(
             ((MAX_UNICODE_DENSITY_LIST_ENTRY_COUNT - entry_count as usize)
                 * mem::size_of::<DensityListPageEntry>()) as i64,
         ))?;
 
         // rgPadding
         let mut padding = [0_u8; 12];
-        f.read_exact(&mut padding)?;
+        cursor.read_exact(&mut padding)?;
         if padding != [0; 12] {
             return Err(NdbError::InvalidDensityListPadding.into());
         }
+
+        let buffer = cursor.into_inner();
 
         // pageTrailer
         let trailer = UnicodePageTrailer::read(f)?;
         if trailer.page_type() != PageType::DensityList {
             return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
+        }
+
+        let crc = compute_crc(0, &buffer);
+        if crc != trailer.crc() {
+            return Err(NdbError::InvalidPageCrc(crc).into());
         }
 
         Ok(Self {
@@ -1727,29 +1776,41 @@ impl DensityListPage for UnicodeDensityListPage {
         })
     }
 
-    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+    fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()> {
+        let mut cursor = Cursor::new([0_u8; 496]);
+
         // bFlags
-        f.write_u8(if self.backfill_complete { 0x01 } else { 0 })?;
+        cursor.write_u8(if self.backfill_complete { 0x01 } else { 0 })?;
 
         // cEntDList
-        f.write_u8(self.entry_count)?;
+        cursor.write_u8(self.entry_count)?;
 
         // wPadding
-        f.write_u16::<LittleEndian>(0)?;
+        cursor.write_u16::<LittleEndian>(0)?;
 
         // ulCurrentPage
-        f.write_u32::<LittleEndian>(self.current_page)?;
+        cursor.write_u32::<LittleEndian>(self.current_page)?;
 
         // rgDListPageEnt
         for entry in self.entries.iter() {
-            entry.write(f)?;
+            entry.write(&mut cursor)?;
         }
 
         // rgPadding
-        f.write_all(&[0; 12])?;
+        cursor.write_all(&[0; 12])?;
+
+        let buffer = cursor.into_inner();
+        let crc = compute_crc(0, &buffer);
+
+        f.seek(SeekFrom::Start(DENSITY_LIST_FILE_OFFSET as u64))?;
+        f.write_all(&buffer)?;
 
         // pageTrailer
-        self.trailer.write(f)
+        let trailer = UnicodePageTrailer {
+            crc,
+            ..self.trailer
+        };
+        trailer.write(f)
     }
 
     fn backfill_complete(&self) -> bool {
@@ -1812,44 +1873,57 @@ impl DensityListPage for AnsiDensityListPage {
     }
 
     fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self> {
+        f.seek(SeekFrom::Start(DENSITY_LIST_FILE_OFFSET as u64))?;
+
+        let mut buffer = [0_u8; 500];
+        f.read_exact(&mut buffer)?;
+        let mut cursor = Cursor::new(buffer);
+
         // bFlags
-        let backfill_complete = f.read_u8()? & 0x01 != 0;
+        let backfill_complete = cursor.read_u8()? & 0x01 != 0;
 
         // cEntDList
-        let entry_count = f.read_u8()?;
+        let entry_count = cursor.read_u8()?;
         if entry_count > MAX_ANSI_DENSITY_LIST_ENTRY_COUNT as u8 {
             return Err(NdbError::InvalidDensityListEntryCount(entry_count as usize).into());
         }
 
         // wPadding
-        if f.read_u16::<LittleEndian>()? != 0 {
+        if cursor.read_u16::<LittleEndian>()? != 0 {
             return Err(NdbError::InvalidDensityListPadding.into());
         }
 
         // ulCurrentPage
-        let current_page = f.read_u32::<LittleEndian>()?;
+        let current_page = cursor.read_u32::<LittleEndian>()?;
 
         // rgDListPageEnt
         let mut entries = [DensityListPageEntry(0); MAX_ANSI_DENSITY_LIST_ENTRY_COUNT];
         for entry in entries.iter_mut().take(entry_count as usize) {
-            *entry = DensityListPageEntry::read(f)?;
+            *entry = DensityListPageEntry::read(&mut cursor)?;
         }
-        f.seek(SeekFrom::Current(
+        cursor.seek(SeekFrom::Current(
             ((MAX_ANSI_DENSITY_LIST_ENTRY_COUNT - entry_count as usize)
                 * mem::size_of::<DensityListPageEntry>()) as i64,
         ))?;
 
         // rgPadding
         let mut padding = [0_u8; 12];
-        f.read_exact(&mut padding)?;
+        cursor.read_exact(&mut padding)?;
         if padding != [0; 12] {
             return Err(NdbError::InvalidDensityListPadding.into());
         }
+
+        let buffer = cursor.into_inner();
 
         // pageTrailer
         let trailer = AnsiPageTrailer::read(f)?;
         if trailer.page_type() != PageType::DensityList {
             return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
+        }
+
+        let crc = compute_crc(0, &buffer);
+        if crc != trailer.crc() {
+            return Err(NdbError::InvalidPageCrc(crc).into());
         }
 
         Ok(Self {
@@ -1861,29 +1935,41 @@ impl DensityListPage for AnsiDensityListPage {
         })
     }
 
-    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+    fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()> {
+        let mut cursor = Cursor::new([0_u8; 500]);
+
         // bFlags
-        f.write_u8(if self.backfill_complete { 0x01 } else { 0 })?;
+        cursor.write_u8(if self.backfill_complete { 0x01 } else { 0 })?;
 
         // cEntDList
-        f.write_u8(self.entry_count)?;
+        cursor.write_u8(self.entry_count)?;
 
         // wPadding
-        f.write_u16::<LittleEndian>(0)?;
+        cursor.write_u16::<LittleEndian>(0)?;
 
         // ulCurrentPage
-        f.write_u32::<LittleEndian>(self.current_page)?;
+        cursor.write_u32::<LittleEndian>(self.current_page)?;
 
         // rgDListPageEnt
         for entry in self.entries.iter() {
-            entry.write(f)?;
+            entry.write(&mut cursor)?;
         }
 
         // rgPadding
-        f.write_all(&[0; 12])?;
+        cursor.write_all(&[0; 12])?;
+
+        let buffer = cursor.into_inner();
+        let crc = compute_crc(0, &buffer);
+
+        f.seek(SeekFrom::Start(DENSITY_LIST_FILE_OFFSET as u64))?;
+        f.write_all(&buffer)?;
 
         // pageTrailer
-        self.trailer.write(f)
+        let trailer = AnsiPageTrailer {
+            crc,
+            ..self.trailer
+        };
+        trailer.write(f)
     }
 
     fn backfill_complete(&self) -> bool {
