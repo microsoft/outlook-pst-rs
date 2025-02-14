@@ -1,6 +1,11 @@
 #![doc = include_str!("../README.md")]
 
-use std::{fs::File, io::{self, Seek, SeekFrom}, path::Path, sync::Mutex};
+use std::{
+    fs::File,
+    io::{self, Seek, SeekFrom},
+    path::Path,
+    sync::Mutex,
+};
 
 pub mod ltp;
 pub mod messaging;
