@@ -61,6 +61,14 @@ pub enum NdbError {
     UnexpectedPageType(PageType),
     #[error("Invalid ANSI map page dwPadding: 0x{0:0X}")]
     InvalidAnsiMapPagePadding(u32),
+    #[error("Invalid DLISTPAGEENT dwPageNum: 0x{0:0X}")]
+    InvalidDensityListEntryPageNumber(u32),
+    #[error("Invalid DLISTPAGEENT dwFreeSlots: 0x{0:0X}")]
+    InvalidDensityListEntryFreeSlots(u16),
+    #[error("Invalid DLISTPAGE cbEntDList: 0x{0:0X}")]
+    InvalidDensityListEntryCount(usize),
+    #[error("Invalid DLISTPAGE rgPadding")]
+    InvalidDensityListPadding,
 }
 
 impl From<NdbError> for io::Error {
@@ -1573,6 +1581,327 @@ pub type AnsiAllocationPageMapPage = AnsiMapPage<{ PageType::AllocationPageMap a
 pub type AnsiFreeMapPage = AnsiMapPage<{ PageType::FreeMap as u8 }>;
 /// [FPMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/913a72b0-83f6-4c29-8b0b-40967579a534)
 pub type AnsiFreePageMapPage = AnsiMapPage<{ PageType::FreePageMap as u8 }>;
+
+const DENSITY_LIST_ENTRY_PAGE_NUMBER_MASK: u32 = 0x000F_FFFF;
+const DENSITY_LIST_ENTRY_FREE_SLOTS_MASK: u32 = 0x0FFF;
+
+/// [DLISTPAGEENT](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/9d3c45b9-a415-446c-954f-b1b473dbb415)
+#[derive(Copy, Clone, Debug)]
+pub struct DensityListPageEntry(u32);
+
+impl DensityListPageEntry {
+    pub fn new(page: u32, free_slots: u16) -> NdbResult<Self> {
+        if page & !0x000F_FFFF != 0 {
+            return Err(NdbError::InvalidDensityListEntryPageNumber(page));
+        };
+        if free_slots & !0x0FFF != 0 {
+            return Err(NdbError::InvalidDensityListEntryFreeSlots(free_slots));
+        };
+
+        Ok(Self(page | (free_slots as u32) << 20))
+    }
+
+    pub fn read(f: &mut dyn Read) -> io::Result<Self> {
+        Ok(Self(f.read_u32::<LittleEndian>()?))
+    }
+
+    pub fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        f.write_u32::<LittleEndian>(self.0)
+    }
+
+    pub fn page(&self) -> u32 {
+        self.0 & DENSITY_LIST_ENTRY_PAGE_NUMBER_MASK
+    }
+
+    pub fn free_slots(&self) -> u16 {
+        (self.0 >> 20) as u16
+    }
+}
+
+pub trait DensityListPage: Sized {
+    type Trailer: PageTrailer;
+
+    fn new(
+        backfill_complete: bool,
+        current_page: u32,
+        entries: &[DensityListPageEntry],
+        trailer: Self::Trailer,
+    ) -> NdbResult<Self>;
+    fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self>;
+    fn write(&self, f: &mut dyn Write) -> io::Result<()>;
+    fn backfill_complete(&self) -> bool;
+    fn current_page(&self) -> u32;
+    fn entries(&self) -> &[DensityListPageEntry];
+    fn trailer(&self) -> &Self::Trailer;
+}
+
+const MAX_UNICODE_DENSITY_LIST_ENTRY_COUNT: usize = 476 / mem::size_of::<DensityListPageEntry>();
+
+pub struct UnicodeDensityListPage {
+    backfill_complete: bool,
+    current_page: u32,
+    entry_count: u8,
+    entries: [DensityListPageEntry; MAX_UNICODE_DENSITY_LIST_ENTRY_COUNT],
+    trailer: UnicodePageTrailer,
+}
+
+impl DensityListPage for UnicodeDensityListPage {
+    type Trailer = UnicodePageTrailer;
+
+    fn new(
+        backfill_complete: bool,
+        current_page: u32,
+        entries: &[DensityListPageEntry],
+        trailer: UnicodePageTrailer,
+    ) -> NdbResult<Self> {
+        if entries.len() > MAX_UNICODE_DENSITY_LIST_ENTRY_COUNT {
+            return Err(NdbError::InvalidDensityListEntryCount(entries.len()));
+        }
+
+        if trailer.page_type() != PageType::DensityList {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()));
+        }
+
+        let entry_count = entries.len() as u8;
+
+        let mut buffer = [DensityListPageEntry(0); MAX_UNICODE_DENSITY_LIST_ENTRY_COUNT];
+        buffer[..entries.len()].copy_from_slice(entries);
+        let entries = buffer;
+
+        Ok(Self {
+            backfill_complete,
+            current_page,
+            entry_count,
+            entries,
+            trailer,
+        })
+    }
+
+    fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self> {
+        // bFlags
+        let backfill_complete = f.read_u8()? & 0x01 != 0;
+
+        // cEntDList
+        let entry_count = f.read_u8()?;
+        if entry_count > MAX_UNICODE_DENSITY_LIST_ENTRY_COUNT as u8 {
+            return Err(NdbError::InvalidDensityListEntryCount(entry_count as usize).into());
+        }
+
+        // wPadding
+        if f.read_u16::<LittleEndian>()? != 0 {
+            return Err(NdbError::InvalidDensityListPadding.into());
+        }
+
+        // ulCurrentPage
+        let current_page = f.read_u32::<LittleEndian>()?;
+
+        // rgDListPageEnt
+        let mut entries = [DensityListPageEntry(0); MAX_UNICODE_DENSITY_LIST_ENTRY_COUNT];
+        for entry in entries.iter_mut().take(entry_count as usize) {
+            *entry = DensityListPageEntry::read(f)?;
+        }
+        f.seek(SeekFrom::Current(
+            ((MAX_UNICODE_DENSITY_LIST_ENTRY_COUNT - entry_count as usize)
+                * mem::size_of::<DensityListPageEntry>()) as i64,
+        ))?;
+
+        // rgPadding
+        let mut padding = [0_u8; 12];
+        f.read_exact(&mut padding)?;
+        if padding != [0; 12] {
+            return Err(NdbError::InvalidDensityListPadding.into());
+        }
+
+        // pageTrailer
+        let trailer = UnicodePageTrailer::read(f)?;
+        if trailer.page_type() != PageType::DensityList {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
+        }
+
+        Ok(Self {
+            backfill_complete,
+            current_page,
+            entry_count,
+            entries,
+            trailer,
+        })
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        // bFlags
+        f.write_u8(if self.backfill_complete { 0x01 } else { 0 })?;
+
+        // cEntDList
+        f.write_u8(self.entry_count)?;
+
+        // wPadding
+        f.write_u16::<LittleEndian>(0)?;
+
+        // ulCurrentPage
+        f.write_u32::<LittleEndian>(self.current_page)?;
+
+        // rgDListPageEnt
+        for entry in self.entries.iter() {
+            entry.write(f)?;
+        }
+
+        // rgPadding
+        f.write_all(&[0; 12])?;
+
+        // pageTrailer
+        self.trailer.write(f)
+    }
+
+    fn backfill_complete(&self) -> bool {
+        self.backfill_complete
+    }
+
+    fn current_page(&self) -> u32 {
+        self.current_page
+    }
+
+    fn entries(&self) -> &[DensityListPageEntry] {
+        &self.entries[..self.entry_count as usize]
+    }
+
+    fn trailer(&self) -> &UnicodePageTrailer {
+        &self.trailer
+    }
+}
+
+const MAX_ANSI_DENSITY_LIST_ENTRY_COUNT: usize = 480 / mem::size_of::<DensityListPageEntry>();
+
+pub struct AnsiDensityListPage {
+    backfill_complete: bool,
+    current_page: u32,
+    entry_count: u8,
+    entries: [DensityListPageEntry; MAX_ANSI_DENSITY_LIST_ENTRY_COUNT],
+    trailer: AnsiPageTrailer,
+}
+
+impl DensityListPage for AnsiDensityListPage {
+    type Trailer = AnsiPageTrailer;
+
+    fn new(
+        backfill_complete: bool,
+        current_page: u32,
+        entries: &[DensityListPageEntry],
+        trailer: AnsiPageTrailer,
+    ) -> NdbResult<Self> {
+        if entries.len() > MAX_ANSI_DENSITY_LIST_ENTRY_COUNT {
+            return Err(NdbError::InvalidDensityListEntryCount(entries.len()));
+        }
+
+        if trailer.page_type() != PageType::DensityList {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()));
+        }
+
+        let entry_count = entries.len() as u8;
+
+        let mut buffer = [DensityListPageEntry(0); MAX_ANSI_DENSITY_LIST_ENTRY_COUNT];
+        buffer[..entries.len()].copy_from_slice(entries);
+        let entries = buffer;
+
+        Ok(Self {
+            backfill_complete,
+            current_page,
+            entry_count,
+            entries,
+            trailer,
+        })
+    }
+
+    fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self> {
+        // bFlags
+        let backfill_complete = f.read_u8()? & 0x01 != 0;
+
+        // cEntDList
+        let entry_count = f.read_u8()?;
+        if entry_count > MAX_ANSI_DENSITY_LIST_ENTRY_COUNT as u8 {
+            return Err(NdbError::InvalidDensityListEntryCount(entry_count as usize).into());
+        }
+
+        // wPadding
+        if f.read_u16::<LittleEndian>()? != 0 {
+            return Err(NdbError::InvalidDensityListPadding.into());
+        }
+
+        // ulCurrentPage
+        let current_page = f.read_u32::<LittleEndian>()?;
+
+        // rgDListPageEnt
+        let mut entries = [DensityListPageEntry(0); MAX_ANSI_DENSITY_LIST_ENTRY_COUNT];
+        for entry in entries.iter_mut().take(entry_count as usize) {
+            *entry = DensityListPageEntry::read(f)?;
+        }
+        f.seek(SeekFrom::Current(
+            ((MAX_ANSI_DENSITY_LIST_ENTRY_COUNT - entry_count as usize)
+                * mem::size_of::<DensityListPageEntry>()) as i64,
+        ))?;
+
+        // rgPadding
+        let mut padding = [0_u8; 12];
+        f.read_exact(&mut padding)?;
+        if padding != [0; 12] {
+            return Err(NdbError::InvalidDensityListPadding.into());
+        }
+
+        // pageTrailer
+        let trailer = AnsiPageTrailer::read(f)?;
+        if trailer.page_type() != PageType::DensityList {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
+        }
+
+        Ok(Self {
+            backfill_complete,
+            current_page,
+            entry_count,
+            entries,
+            trailer,
+        })
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        // bFlags
+        f.write_u8(if self.backfill_complete { 0x01 } else { 0 })?;
+
+        // cEntDList
+        f.write_u8(self.entry_count)?;
+
+        // wPadding
+        f.write_u16::<LittleEndian>(0)?;
+
+        // ulCurrentPage
+        f.write_u32::<LittleEndian>(self.current_page)?;
+
+        // rgDListPageEnt
+        for entry in self.entries.iter() {
+            entry.write(f)?;
+        }
+
+        // rgPadding
+        f.write_all(&[0; 12])?;
+
+        // pageTrailer
+        self.trailer.write(f)
+    }
+
+    fn backfill_complete(&self) -> bool {
+        self.backfill_complete
+    }
+
+    fn current_page(&self) -> u32 {
+        self.current_page
+    }
+
+    fn entries(&self) -> &[DensityListPageEntry] {
+        &self.entries[..self.entry_count as usize]
+    }
+
+    fn trailer(&self) -> &AnsiPageTrailer {
+        &self.trailer
+    }
+}
 
 #[cfg(test)]
 mod tests {
