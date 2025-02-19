@@ -2258,12 +2258,6 @@ impl BTreePage for AnsiBTreePage {
             return Err(NdbError::InvalidBTreePageLevel(level).into());
         }
 
-        // dwPadding
-        let padding = f.read_u32::<LittleEndian>()?;
-        if padding != 0 {
-            return Err(NdbError::InvalidBTreePagePadding(padding).into());
-        }
-
         // pageTrailer
         let trailer = AnsiPageTrailer::read(f)?;
         if trailer.page_type() != PageType::BlockBTree && trailer.page_type() != PageType::NodeBTree
@@ -2311,9 +2305,6 @@ impl BTreePage for AnsiBTreePage {
 
         // cLevel
         cursor.write_u8(self.level)?;
-
-        // dwPadding
-        cursor.write_u32::<LittleEndian>(0)?;
 
         let buffer = cursor.into_inner();
         let crc = compute_crc(0, &buffer);
