@@ -80,6 +80,10 @@ pub enum NdbError {
     InvalidBTreePagePadding(u32),
     #[error("Invalid NBTENTRY nid: 0x{0:016X}")]
     InvalidNodeBTreeEntryNodeId(u64),
+    #[error("Invalid BLOCKTRAILER cb: 0x{0:04X}")]
+    InvalidBlockSize(u16),
+    #[error("Invalid BLOCKTRAILER dwCRC: 0x{0:08X}")]
+    InvalidBlockCrc(u32),
 }
 
 impl From<NdbError> for io::Error {
@@ -90,12 +94,14 @@ impl From<NdbError> for io::Error {
 
 pub type NdbResult<T> = Result<T, NdbError>;
 
+pub mod block;
 pub mod block_id;
 pub mod block_ref;
 pub mod byte_index;
 pub mod node_id;
 pub mod page;
 
+use block::*;
 use block_id::*;
 use block_ref::*;
 use byte_index::*;

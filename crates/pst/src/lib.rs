@@ -13,6 +13,7 @@ pub mod ndb;
 
 mod block_sig;
 mod crc;
+mod encode;
 
 /// [PST File](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/6b57253b-0853-47bb-99bb-d4b8f78105f0)
 pub struct PstFile {
