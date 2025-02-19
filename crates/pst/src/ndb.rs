@@ -84,12 +84,8 @@ pub enum NdbError {
     InvalidBTreeEntrySize(u8),
     #[error("Invalid BTPAGE dwPadding: 0x{0:08X}")]
     InvalidBTreePagePadding(u32),
-    #[error("Invalid BBTENTRY dwPadding: 0x{0:08X}")]
-    InvalidBlockBTreeEntryPadding(u32),
     #[error("Invalid NBTENTRY nid: 0x{0:016X}")]
     InvalidNodeBTreeEntryNodeId(u64),
-    #[error("Invalid NBTENTRY dwPadding: 0x{0:08X}")]
-    InvalidNodeBTreeEntryPadding(u32),
 }
 
 impl From<NdbError> for io::Error {
@@ -2488,6 +2484,7 @@ pub struct UnicodeBlockBTreeEntry {
     block: UnicodeBlockRef,
     size: u16,
     ref_count: u16,
+    padding: u32,
 }
 
 impl BTreeEntry for UnicodeBlockBTreeEntry {
@@ -2498,14 +2495,12 @@ impl BTreeEntry for UnicodeBlockBTreeEntry {
         let size = f.read_u16::<LittleEndian>()?;
         let ref_count = f.read_u16::<LittleEndian>()?;
         let padding = f.read_u32::<LittleEndian>()?;
-        if padding != 0 {
-            return Err(NdbError::InvalidBlockBTreeEntryPadding(padding).into());
-        }
 
         Ok(Self {
             block,
             size,
             ref_count,
+            padding,
         })
     }
 
@@ -2513,7 +2508,7 @@ impl BTreeEntry for UnicodeBlockBTreeEntry {
         self.block.write(f)?;
         f.write_u16::<LittleEndian>(self.size)?;
         f.write_u16::<LittleEndian>(self.ref_count)?;
-        f.write_u32::<LittleEndian>(0)
+        f.write_u32::<LittleEndian>(self.padding)
     }
 }
 
@@ -2525,6 +2520,7 @@ impl BlockBTreeEntry for UnicodeBlockBTreeEntry {
             block,
             size,
             ref_count: 1,
+            ..Default::default()
         }
     }
 
@@ -2550,6 +2546,7 @@ impl Default for UnicodeBlockBTreeEntry {
             },
             size: 0,
             ref_count: 0,
+            padding: 0,
         }
     }
 }
@@ -2747,6 +2744,7 @@ pub struct UnicodeNodeBTreeEntry {
     data: UnicodeBlockId,
     sub_node: Option<UnicodeBlockId>,
     parent: Option<NodeId>,
+    padding: u32,
 }
 
 impl BTreeEntry for UnicodeNodeBTreeEntry {
@@ -2777,15 +2775,13 @@ impl BTreeEntry for UnicodeNodeBTreeEntry {
 
         // dwPadding
         let padding = f.read_u32::<LittleEndian>()?;
-        if padding != 0 {
-            return Err(NdbError::InvalidNodeBTreeEntryPadding(padding).into());
-        }
 
         Ok(Self {
             node,
             data,
             sub_node,
             parent,
+            padding,
         })
     }
 
@@ -2806,7 +2802,7 @@ impl BTreeEntry for UnicodeNodeBTreeEntry {
         self.parent.as_ref().unwrap_or(&NodeId(0)).write(f)?;
 
         // dwPadding
-        f.write_u32::<LittleEndian>(0)
+        f.write_u32::<LittleEndian>(self.padding)
     }
 }
 
@@ -2824,6 +2820,7 @@ impl NodeBTreeEntry for UnicodeNodeBTreeEntry {
             data,
             sub_node,
             parent,
+            ..Default::default()
         }
     }
 
@@ -2851,6 +2848,7 @@ impl Default for UnicodeNodeBTreeEntry {
             data: UnicodeBlockId(0),
             sub_node: None,
             parent: None,
+            padding: 0,
         }
     }
 }

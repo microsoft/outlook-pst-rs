@@ -1,10 +1,14 @@
+use clap::Parser;
 use outlook_pst::{
     ndb::{DensityListPage, PageTrailer},
     *,
 };
 
+mod args;
+
 fn main() -> anyhow::Result<()> {
-    let pst = PstFile::read(r#"crates/pst/examples/Empty.pst"#).unwrap();
+    let args = args::Args::try_parse()?;
+    let pst = PstFile::read(&args.file).unwrap();
     let density_list = pst.density_list();
 
     let density_list = match density_list {
