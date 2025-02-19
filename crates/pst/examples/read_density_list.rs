@@ -1,6 +1,6 @@
 use clap::Parser;
 use outlook_pst::{
-    ndb::{DensityListPage, PageTrailer},
+    ndb::page::{DensityListPage, PageTrailer},
     *,
 };
 

@@ -90,17 +90,17 @@ impl From<NdbError> for io::Error {
 
 pub type NdbResult<T> = Result<T, NdbError>;
 
-mod block_id;
-mod block_ref;
-mod byte_index;
-mod node_id;
-mod page;
+pub mod block_id;
+pub mod block_ref;
+pub mod byte_index;
+pub mod node_id;
+pub mod page;
 
-pub use block_id::*;
-pub use block_ref::*;
-pub use byte_index::*;
-pub use node_id::*;
-pub use page::*;
+use block_id::*;
+use block_ref::*;
+use byte_index::*;
+use node_id::*;
+use page::*;
 
 /// `fAMapValid`
 ///

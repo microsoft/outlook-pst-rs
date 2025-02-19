@@ -1,8 +1,12 @@
 use clap::Parser;
 use outlook_pst::{
     ndb::{
-        BTreePage, BTreePageEntry, BlockBTreeEntry, Header, NodeBTreeEntry, Root,
-        UnicodeBlockBTree, UnicodeBlockRef, UnicodeNodeBTree,
+        block_ref::UnicodeBlockRef,
+        page::{
+            BTreePage, BTreePageEntry, BlockBTreeEntry, NodeBTreeEntry, UnicodeBlockBTree,
+            UnicodeNodeBTree,
+        },
+        Header, Root,
     },
     *,
 };
@@ -32,7 +36,7 @@ fn output_node_btree(
 ) -> io::Result<()> {
     let node_btree = UnicodeNodeBTree::read(&mut *file, node_btree)?;
     match node_btree {
-        ndb::UnicodeNodeBTree::Intermediate(page) => {
+        UnicodeNodeBTree::Intermediate(page) => {
             let level = page.level();
             let entries = page.entries();
 
@@ -53,7 +57,7 @@ fn output_node_btree(
                 output_node_btree(file, max_level, entry.block())?;
             }
         }
-        ndb::UnicodeNodeBTree::Leaf(page, _) => {
+        UnicodeNodeBTree::Leaf(page, _) => {
             assert_eq!(page.level(), 0);
             let entries = page.entries();
 
@@ -81,7 +85,7 @@ fn output_block_btree(
 ) -> io::Result<()> {
     let block_btree = UnicodeBlockBTree::read(&mut *file, block_btree)?;
     match block_btree {
-        ndb::UnicodeBlockBTree::Intermediate(page) => {
+        UnicodeBlockBTree::Intermediate(page) => {
             let level = page.level();
             let entries = page.entries();
 
@@ -102,7 +106,7 @@ fn output_block_btree(
                 output_block_btree(file, max_level, entry.block())?;
             }
         }
-        ndb::UnicodeBlockBTree::Leaf(page, _) => {
+        UnicodeBlockBTree::Leaf(page, _) => {
             assert_eq!(page.level(), 0);
             let entries = page.entries();
 
