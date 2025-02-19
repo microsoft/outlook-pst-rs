@@ -4,7 +4,10 @@
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use core::mem;
-use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
+use std::{
+    io::{self, Cursor, Read, Seek, SeekFrom, Write},
+    marker::PhantomData,
+};
 use thiserror::Error;
 
 use crate::{block_sig::compute_sig, crc::compute_crc};
@@ -2016,7 +2019,6 @@ pub trait BTreeEntry: Sized + Copy + Default {
 pub trait BTreePage: Sized {
     type Entry: BTreeEntry;
     type Trailer: PageTrailer;
-    const BTREE_ENTRIES_SIZE: usize;
 
     fn new(level: u8, entries: &[Self::Entry], trailer: Self::Trailer) -> NdbResult<Self>;
     fn level(&self) -> u8;
@@ -2037,9 +2039,7 @@ where
         f.read_exact(&mut buffer)?;
         let mut cursor = Cursor::new(buffer);
 
-        cursor.seek(SeekFrom::Start(
-            <Self as BTreePage>::BTREE_ENTRIES_SIZE as u64,
-        ))?;
+        cursor.seek(SeekFrom::Start(UNICODE_BTREE_ENTRIES_SIZE as u64))?;
 
         // cEnt
         let entry_count = usize::from(cursor.read_u8()?);
@@ -2055,7 +2055,7 @@ where
 
         // cbEnt
         let entry_size = f.read_u8()?;
-        if usize::from(entry_size) != mem::size_of::<UnicodeBTreePageEntry>() {
+        if usize::from(entry_size) != Entry::ENTRY_SIZE {
             return Err(NdbError::InvalidBTreeEntrySize(entry_size).into());
         }
 
@@ -2116,7 +2116,7 @@ where
         cursor.write_u8(Self::MAX_BTREE_ENTRIES as u8)?;
 
         // cbEnt
-        cursor.write_u8(mem::size_of::<UnicodeBTreePageEntry>() as u8)?;
+        cursor.write_u8(Entry::ENTRY_SIZE as u8)?;
 
         // cLevel
         cursor.write_u8(self.level())?;
@@ -2149,7 +2149,6 @@ pub struct UnicodeBTreeEntryPage {
 impl BTreePage for UnicodeBTreeEntryPage {
     type Entry = UnicodeBTreePageEntry;
     type Trailer = UnicodePageTrailer;
-    const BTREE_ENTRIES_SIZE: usize = 488;
 
     fn new(
         level: u8,
@@ -2211,9 +2210,7 @@ where
         f.read_exact(&mut buffer)?;
         let mut cursor = Cursor::new(buffer);
 
-        cursor.seek(SeekFrom::Start(
-            <Self as BTreePage>::BTREE_ENTRIES_SIZE as u64,
-        ))?;
+        cursor.seek(SeekFrom::Start(ANSI_BTREE_ENTRIES_SIZE as u64))?;
 
         // cEnt
         let entry_count = usize::from(cursor.read_u8()?);
@@ -2229,7 +2226,7 @@ where
 
         // cbEnt
         let entry_size = f.read_u8()?;
-        if usize::from(entry_size) != mem::size_of::<AnsiBTreePageEntry>() {
+        if usize::from(entry_size) != Entry::ENTRY_SIZE {
             return Err(NdbError::InvalidBTreeEntrySize(entry_size).into());
         }
 
@@ -2284,7 +2281,7 @@ where
         cursor.write_u8(Self::MAX_BTREE_ENTRIES as u8)?;
 
         // cbEnt
-        cursor.write_u8(mem::size_of::<AnsiBTreePageEntry>() as u8)?;
+        cursor.write_u8(Entry::ENTRY_SIZE as u8)?;
 
         // cLevel
         cursor.write_u8(self.level())?;
@@ -2314,7 +2311,6 @@ pub struct AnsiBTreeEntryPage {
 impl BTreePage for AnsiBTreeEntryPage {
     type Entry = AnsiBTreePageEntry;
     type Trailer = AnsiPageTrailer;
-    const BTREE_ENTRIES_SIZE: usize = 496;
 
     fn new(level: u8, entries: &[AnsiBTreePageEntry], trailer: AnsiPageTrailer) -> NdbResult<Self> {
         if !(1..=8).contains(&level) {
@@ -2570,14 +2566,13 @@ pub struct UnicodeBlockBTreePage {
 impl BTreePage for UnicodeBlockBTreePage {
     type Entry = UnicodeBlockBTreeEntry;
     type Trailer = UnicodePageTrailer;
-    const BTREE_ENTRIES_SIZE: usize = 488;
 
     fn new(
         level: u8,
         entries: &[UnicodeBlockBTreeEntry],
         trailer: UnicodePageTrailer,
     ) -> NdbResult<Self> {
-        if !(1..=8).contains(&level) {
+        if level != 0 {
             return Err(NdbError::InvalidBTreePageLevel(level));
         }
 
@@ -2689,14 +2684,13 @@ pub struct AnsiBlockBTreePage {
 impl BTreePage for AnsiBlockBTreePage {
     type Entry = AnsiBlockBTreeEntry;
     type Trailer = AnsiPageTrailer;
-    const BTREE_ENTRIES_SIZE: usize = 488;
 
     fn new(
         level: u8,
         entries: &[AnsiBlockBTreeEntry],
         trailer: AnsiPageTrailer,
     ) -> NdbResult<Self> {
-        if !(1..=8).contains(&level) {
+        if level != 0 {
             return Err(NdbError::InvalidBTreePageLevel(level));
         }
 
@@ -2875,14 +2869,13 @@ pub struct UnicodeNodeBTreePage {
 impl BTreePage for UnicodeNodeBTreePage {
     type Entry = UnicodeNodeBTreeEntry;
     type Trailer = UnicodePageTrailer;
-    const BTREE_ENTRIES_SIZE: usize = 488;
 
     fn new(
         level: u8,
         entries: &[UnicodeNodeBTreeEntry],
         trailer: UnicodePageTrailer,
     ) -> NdbResult<Self> {
-        if !(1..=8).contains(&level) {
+        if level != 0 {
             return Err(NdbError::InvalidBTreePageLevel(level));
         }
 
@@ -3030,10 +3023,9 @@ pub struct AnsiNodeBTreePage {
 impl BTreePage for AnsiNodeBTreePage {
     type Entry = AnsiNodeBTreeEntry;
     type Trailer = AnsiPageTrailer;
-    const BTREE_ENTRIES_SIZE: usize = 488;
 
     fn new(level: u8, entries: &[AnsiNodeBTreeEntry], trailer: AnsiPageTrailer) -> NdbResult<Self> {
-        if !(1..=8).contains(&level) {
+        if level != 0 {
             return Err(NdbError::InvalidBTreePageLevel(level));
         }
 
@@ -3071,6 +3063,96 @@ impl BTreePage for AnsiNodeBTreePage {
 }
 
 impl AnsiBTreePage<AnsiNodeBTreeEntry> for AnsiNodeBTreePage {}
+
+pub enum UnicodeBTree<LeafPage, Entry>
+where
+    LeafPage: UnicodeBTreePage<Entry>,
+    Entry: BTreeEntry,
+{
+    Intermediate(Box<UnicodeBTreeEntryPage>),
+    Leaf(Box<LeafPage>, PhantomData<Entry>),
+}
+
+impl<LeafPage, Entry> UnicodeBTree<LeafPage, Entry>
+where
+    LeafPage: UnicodeBTreePage<Entry>,
+    Entry: BTreeEntry,
+{
+    pub fn read<R: Read + Seek>(f: &mut R, block: UnicodeBlockRef) -> io::Result<Self> {
+        f.seek(SeekFrom::Start(block.index().index()))?;
+
+        let mut buffer = [0_u8; 512];
+        f.read_exact(&mut buffer)?;
+        let mut cursor = Cursor::new(buffer);
+
+        cursor.seek(SeekFrom::Start(UNICODE_BTREE_ENTRIES_SIZE as u64 + 3))?;
+        let level = cursor.read_u8()?;
+
+        cursor.seek(SeekFrom::Start(0))?;
+        Ok(if level == 0 {
+            UnicodeBTree::Leaf(Box::new(LeafPage::read(&mut cursor)?), PhantomData)
+        } else {
+            UnicodeBTree::Intermediate(Box::new(UnicodeBTreeEntryPage::read(&mut cursor)?))
+        })
+    }
+
+    pub fn write<W: Write + Seek>(&self, f: &mut W, block: UnicodeBlockRef) -> io::Result<()> {
+        f.seek(SeekFrom::Start(block.index().index()))?;
+
+        match self {
+            UnicodeBTree::Intermediate(page) => page.write(f),
+            UnicodeBTree::Leaf(page, _) => page.write(f),
+        }
+    }
+}
+
+pub type UnicodeBlockBTree = UnicodeBTree<UnicodeBlockBTreePage, UnicodeBlockBTreeEntry>;
+pub type UnicodeNodeBTree = UnicodeBTree<UnicodeNodeBTreePage, UnicodeNodeBTreeEntry>;
+
+pub enum AnsiBTree<LeafPage, Entry>
+where
+    LeafPage: AnsiBTreePage<Entry>,
+    Entry: BTreeEntry,
+{
+    Intermediate(Box<AnsiBTreeEntryPage>),
+    Leaf(Box<LeafPage>, PhantomData<Entry>),
+}
+
+impl<LeafPage, Entry> AnsiBTree<LeafPage, Entry>
+where
+    LeafPage: AnsiBTreePage<Entry>,
+    Entry: BTreeEntry,
+{
+    pub fn read<R: Read + Seek>(f: &mut R, block: AnsiBlockRef) -> io::Result<Self> {
+        f.seek(SeekFrom::Start(u64::from(block.index().index())))?;
+
+        let mut buffer = [0_u8; 512];
+        f.read_exact(&mut buffer)?;
+        let mut cursor = Cursor::new(buffer);
+
+        cursor.seek(SeekFrom::Start(ANSI_BTREE_ENTRIES_SIZE as u64 + 3))?;
+        let level = cursor.read_u8()?;
+
+        cursor.seek(SeekFrom::Start(0))?;
+        Ok(if level == 0 {
+            AnsiBTree::Leaf(Box::new(LeafPage::read(&mut cursor)?), PhantomData)
+        } else {
+            AnsiBTree::Intermediate(Box::new(AnsiBTreeEntryPage::read(&mut cursor)?))
+        })
+    }
+
+    pub fn write<W: Write + Seek>(&self, f: &mut W, block: AnsiBlockRef) -> io::Result<()> {
+        f.seek(SeekFrom::Start(u64::from(block.index().index())))?;
+
+        match self {
+            AnsiBTree::Intermediate(page) => page.write(f),
+            AnsiBTree::Leaf(page, _) => page.write(f),
+        }
+    }
+}
+
+pub type AnsiBlockBTree = AnsiBTree<AnsiBlockBTreePage, AnsiBlockBTreeEntry>;
+pub type AnsiNodeBTree = AnsiBTree<AnsiNodeBTreePage, AnsiNodeBTreeEntry>;
 
 #[cfg(test)]
 mod tests {
