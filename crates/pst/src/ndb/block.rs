@@ -339,7 +339,6 @@ impl Block for AnsiDataBlock {
 /// / [XXBLOCK](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/061b6ac4-d1da-468c-b75d-0303a0a8f468)
 pub trait DataTreeBlock: Sized {
     type Trailer: BlockTrailer;
-    const ENTRY_SIZE: u16;
 
     fn level(&self) -> u8;
     fn total_size(&self) -> u32;
@@ -347,6 +346,8 @@ pub trait DataTreeBlock: Sized {
 }
 
 trait DataTreeBlockExt: DataTreeBlock {
+    const ENTRY_SIZE: u16;
+
     fn new(
         data: Vec<u8>,
         level: u8,
@@ -391,7 +392,7 @@ where
             .map_err(NdbError::InvalidInternalBlockData)?;
         if entry_count
             > (trailer.size() - Self::Trailer::SIZE - DATA_TREE_BLOCK_HEADER_SIZE)
-                / <Self as DataTreeBlock>::ENTRY_SIZE
+                / <Self as DataTreeBlockExt>::ENTRY_SIZE
         {
             return Err(NdbError::InvalidInternalBlockEntryCount(entry_count));
         }
@@ -450,7 +451,6 @@ impl UnicodeDataTreeBlock {
 
 impl DataTreeBlock for UnicodeDataTreeBlock {
     type Trailer = UnicodeBlockTrailer;
-    const ENTRY_SIZE: u16 = 8;
 
     fn level(&self) -> u8 {
         self.level
@@ -473,6 +473,8 @@ impl DataTreeBlock for UnicodeDataTreeBlock {
 }
 
 impl DataTreeBlockExt for UnicodeDataTreeBlock {
+    const ENTRY_SIZE: u16 = 8;
+
     fn new(
         data: Vec<u8>,
         level: u8,
@@ -531,7 +533,6 @@ impl AnsiDataTreeBlock {
 
 impl DataTreeBlock for AnsiDataTreeBlock {
     type Trailer = AnsiBlockTrailer;
-    const ENTRY_SIZE: u16 = 4;
 
     fn level(&self) -> u8 {
         self.level
@@ -554,6 +555,8 @@ impl DataTreeBlock for AnsiDataTreeBlock {
 }
 
 impl DataTreeBlockExt for AnsiDataTreeBlock {
+    const ENTRY_SIZE: u16 = 4;
+
     fn new(
         data: Vec<u8>,
         level: u8,
