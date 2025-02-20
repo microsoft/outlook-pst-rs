@@ -183,7 +183,7 @@ impl BlockTrailer for AnsiBlockTrailer {
 }
 
 /// [Data Blocks](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/d0e6fbaf-00e3-4d4d-bea8-8ab3cdb4fde6)
-pub trait DataBlock: Sized {
+pub trait Block: Sized {
     type Trailer: BlockTrailer;
 
     fn new(encoding: NdbCryptMethod, data: Vec<u8>, trailer: Self::Trailer) -> NdbResult<Self>;
@@ -198,6 +198,9 @@ pub trait DataBlock: Sized {
         }
 
         let trailer = Self::Trailer::read(f)?;
+        if trailer.size() != size {
+            return Err(NdbError::InvalidBlockSize(trailer.size()).into());
+        }
         let crc = compute_crc(0, &data);
         if crc != trailer.crc() {
             return Err(NdbError::InvalidBlockCrc(crc).into());
@@ -263,7 +266,7 @@ pub struct UnicodeDataBlock {
     trailer: UnicodeBlockTrailer,
 }
 
-impl DataBlock for UnicodeDataBlock {
+impl Block for UnicodeDataBlock {
     type Trailer = UnicodeBlockTrailer;
 
     fn new(
@@ -303,7 +306,7 @@ pub struct AnsiDataBlock {
     trailer: AnsiBlockTrailer,
 }
 
-impl DataBlock for AnsiDataBlock {
+impl Block for AnsiDataBlock {
     type Trailer = AnsiBlockTrailer;
 
     fn new(encoding: NdbCryptMethod, data: Vec<u8>, trailer: AnsiBlockTrailer) -> NdbResult<Self> {
@@ -328,6 +331,258 @@ impl DataBlock for AnsiDataBlock {
     }
 
     fn trailer(&self) -> &AnsiBlockTrailer {
+        &self.trailer
+    }
+}
+
+/// [XBLOCK](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/5b7a6935-e83d-4917-9f62-6ce3707f09e0)
+/// / [XXBLOCK](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/061b6ac4-d1da-468c-b75d-0303a0a8f468)
+pub trait DataTreeBlock: Sized {
+    type Trailer: BlockTrailer;
+    const ENTRY_SIZE: u16;
+
+    fn level(&self) -> u8;
+    fn total_size(&self) -> u32;
+    fn entries(&self) -> impl Iterator<Item = <Self::Trailer as BlockTrailer>::BlockId>;
+}
+
+trait DataTreeBlockExt: DataTreeBlock {
+    fn new(
+        data: Vec<u8>,
+        level: u8,
+        entry_count: u16,
+        total_size: u32,
+        trailer: Self::Trailer,
+    ) -> Self;
+    fn verify_internal(
+        block_id: <<Self as DataTreeBlock>::Trailer as BlockTrailer>::BlockId,
+    ) -> NdbResult<()>;
+    fn data(&self) -> &[u8];
+    fn trailer(&self) -> &<Self as DataTreeBlock>::Trailer;
+}
+
+impl<TreeBlock> Block for TreeBlock
+where
+    TreeBlock: DataTreeBlockExt,
+{
+    type Trailer = TreeBlock::Trailer;
+
+    fn new(encoding: NdbCryptMethod, data: Vec<u8>, trailer: Self::Trailer) -> NdbResult<Self> {
+        if encoding != NdbCryptMethod::None {
+            return Err(NdbError::InvalidInternalBlockEncoding(encoding));
+        }
+
+        let block_id = trailer.block_id();
+        <Self as DataTreeBlockExt>::verify_internal(block_id)?;
+
+        let mut data = Cursor::new(data);
+        let block_type = data.read_u8().map_err(NdbError::InvalidInternalBlockData)?;
+        if block_type != 0x01 {
+            return Err(NdbError::InvalidInternalBlockType(block_type));
+        }
+
+        let level = data.read_u8().map_err(NdbError::InvalidInternalBlockData)?;
+        if !(1..=2).contains(&level) {
+            return Err(NdbError::InvalidInternalBlockLevel(level));
+        }
+
+        let entry_count = data
+            .read_u16::<LittleEndian>()
+            .map_err(NdbError::InvalidInternalBlockData)?;
+        if entry_count
+            > (trailer.size() - Self::Trailer::SIZE - DATA_TREE_BLOCK_HEADER_SIZE)
+                / <Self as DataTreeBlock>::ENTRY_SIZE
+        {
+            return Err(NdbError::InvalidInternalBlockEntryCount(entry_count));
+        }
+        let total_size = data
+            .read_u32::<LittleEndian>()
+            .map_err(NdbError::InvalidInternalBlockData)?;
+
+        let data = data.into_inner();
+
+        Ok(<Self as DataTreeBlockExt>::new(
+            data,
+            level,
+            entry_count,
+            total_size,
+            trailer,
+        ))
+    }
+
+    fn encoding(&self) -> NdbCryptMethod {
+        NdbCryptMethod::None
+    }
+
+    fn data(&self) -> &[u8] {
+        <Self as DataTreeBlockExt>::data(self)
+    }
+
+    fn trailer(&self) -> &Self::Trailer {
+        <Self as DataTreeBlockExt>::trailer(self)
+    }
+}
+
+const DATA_TREE_BLOCK_HEADER_SIZE: u16 = 8;
+
+#[derive(Clone, Default)]
+pub struct UnicodeDataTreeBlock {
+    data: Vec<u8>,
+    level: u8,
+    entry_count: u16,
+    total_size: u32,
+    trailer: UnicodeBlockTrailer,
+}
+
+impl UnicodeDataTreeBlock {
+    pub fn new(data: Vec<u8>, trailer: <Self as DataTreeBlock>::Trailer) -> NdbResult<Self> {
+        <Self as Block>::new(NdbCryptMethod::None, data, trailer)
+    }
+
+    pub fn read<R: Read + Seek>(f: &mut R, size: u16) -> io::Result<Self> {
+        <Self as Block>::read(f, size, NdbCryptMethod::None)
+    }
+
+    pub fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()> {
+        <Self as Block>::write(self, f)
+    }
+}
+
+impl DataTreeBlock for UnicodeDataTreeBlock {
+    type Trailer = UnicodeBlockTrailer;
+    const ENTRY_SIZE: u16 = 8;
+
+    fn level(&self) -> u8 {
+        self.level
+    }
+
+    fn total_size(&self) -> u32 {
+        self.total_size
+    }
+
+    fn entries(&self) -> impl Iterator<Item = <Self::Trailer as BlockTrailer>::BlockId> {
+        let data = self.data.as_slice()[(DATA_TREE_BLOCK_HEADER_SIZE as usize)
+            ..((self.entry_count * Self::ENTRY_SIZE) as usize)]
+            .to_vec();
+        let mut data = Cursor::new(data);
+
+        (0..self.entry_count)
+            .filter_map(move |_| <Self::Trailer as BlockTrailer>::BlockId::read(&mut data).ok())
+            .fuse()
+    }
+}
+
+impl DataTreeBlockExt for UnicodeDataTreeBlock {
+    fn new(
+        data: Vec<u8>,
+        level: u8,
+        entry_count: u16,
+        total_size: u32,
+        trailer: Self::Trailer,
+    ) -> Self {
+        Self {
+            data,
+            level,
+            entry_count,
+            total_size,
+            trailer,
+        }
+    }
+
+    fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    fn verify_internal(block_id: <Self::Trailer as BlockTrailer>::BlockId) -> NdbResult<()> {
+        if block_id.is_internal() {
+            Ok(())
+        } else {
+            Err(NdbError::InvalidUnicodeBlockTrailerId(u64::from(block_id)))
+        }
+    }
+
+    fn trailer(&self) -> &Self::Trailer {
+        &self.trailer
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct AnsiDataTreeBlock {
+    data: Vec<u8>,
+    level: u8,
+    entry_count: u16,
+    total_size: u32,
+    trailer: AnsiBlockTrailer,
+}
+
+impl AnsiDataTreeBlock {
+    pub fn new(data: Vec<u8>, trailer: <Self as DataTreeBlock>::Trailer) -> NdbResult<Self> {
+        <Self as Block>::new(NdbCryptMethod::None, data, trailer)
+    }
+
+    pub fn read<R: Read + Seek>(f: &mut R, size: u16) -> io::Result<Self> {
+        <Self as Block>::read(f, size, NdbCryptMethod::None)
+    }
+
+    pub fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()> {
+        <Self as Block>::write(self, f)
+    }
+}
+
+impl DataTreeBlock for AnsiDataTreeBlock {
+    type Trailer = AnsiBlockTrailer;
+    const ENTRY_SIZE: u16 = 4;
+
+    fn level(&self) -> u8 {
+        self.level
+    }
+
+    fn total_size(&self) -> u32 {
+        self.total_size
+    }
+
+    fn entries(&self) -> impl Iterator<Item = <Self::Trailer as BlockTrailer>::BlockId> {
+        let data = self.data.as_slice()[(DATA_TREE_BLOCK_HEADER_SIZE as usize)
+            ..((self.entry_count * Self::ENTRY_SIZE) as usize)]
+            .to_vec();
+        let mut data = Cursor::new(data);
+
+        (0..self.entry_count)
+            .filter_map(move |_| <Self::Trailer as BlockTrailer>::BlockId::read(&mut data).ok())
+            .fuse()
+    }
+}
+
+impl DataTreeBlockExt for AnsiDataTreeBlock {
+    fn new(
+        data: Vec<u8>,
+        level: u8,
+        entry_count: u16,
+        total_size: u32,
+        trailer: Self::Trailer,
+    ) -> Self {
+        Self {
+            data,
+            level,
+            entry_count,
+            total_size,
+            trailer,
+        }
+    }
+
+    fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    fn verify_internal(block_id: <Self::Trailer as BlockTrailer>::BlockId) -> NdbResult<()> {
+        if block_id.is_internal() {
+            Ok(())
+        } else {
+            Err(NdbError::InvalidAnsiBlockTrailerId(u32::from(block_id)))
+        }
+    }
+
+    fn trailer(&self) -> &Self::Trailer {
         &self.trailer
     }
 }

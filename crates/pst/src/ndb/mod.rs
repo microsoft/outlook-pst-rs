@@ -88,6 +88,16 @@ pub enum NdbError {
     InvalidUnicodeBlockTrailerId(u64),
     #[error("Invalid BLOCKTRAILER bid: 0x{0:08X}")]
     InvalidAnsiBlockTrailerId(u32),
+    #[error("Invalid internal block encoding: {0:?}")]
+    InvalidInternalBlockEncoding(NdbCryptMethod),
+    #[error("Invalid internal block data: {0:?}")]
+    InvalidInternalBlockData(io::Error),
+    #[error("Invalid internal block btype: 0x{0:02X}")]
+    InvalidInternalBlockType(u8),
+    #[error("Invalid internal block cLevel: 0x{0:02X}")]
+    InvalidInternalBlockLevel(u8),
+    #[error("Invalid internal block cEnt: 0x{0:04X}")]
+    InvalidInternalBlockEntryCount(u16),
 }
 
 impl From<NdbError> for io::Error {
