@@ -1,16 +1,11 @@
 //! [Blocks](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/a9c1981d-d1ea-457c-b39e-dc7fb0eb95d4)
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use core::mem;
-use std::{
-    io::{self, Cursor, Read, Seek, SeekFrom, Write},
-    marker::PhantomData,
-};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 
 use super::*;
 use crate::{
-    block_sig::compute_sig,
-    crc::{self, compute_crc},
+    crc::compute_crc,
     encode::{cyclic, permute},
 };
 
@@ -191,7 +186,7 @@ impl BlockTrailer for AnsiBlockTrailer {
 pub trait DataBlock: Sized {
     type Trailer: BlockTrailer;
 
-    fn new(encoding: NdbCryptMethod, data: Vec<u8>, trailer: Self::Trailer) -> Self;
+    fn new(encoding: NdbCryptMethod, data: Vec<u8>, trailer: Self::Trailer) -> NdbResult<Self>;
 
     fn read<R: Read + Seek>(f: &mut R, size: u16, encoding: NdbCryptMethod) -> io::Result<Self> {
         let mut data = vec![0; size as usize];
@@ -205,7 +200,7 @@ pub trait DataBlock: Sized {
         let trailer = Self::Trailer::read(f)?;
         let crc = compute_crc(0, &data);
         if crc != trailer.crc() {
-            return Err(NdbError::InvalidPageCrc(crc).into());
+            return Err(NdbError::InvalidBlockCrc(crc).into());
         }
 
         match encoding {
@@ -219,7 +214,7 @@ pub trait DataBlock: Sized {
             _ => {}
         }
 
-        Ok(Self::new(encoding, data, trailer))
+        Ok(Self::new(encoding, data, trailer)?)
     }
 
     fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()> {
@@ -258,26 +253,34 @@ pub trait DataBlock: Sized {
 
     fn encoding(&self) -> NdbCryptMethod;
     fn data(&self) -> &[u8];
-    fn data_mut(&mut self) -> &mut Vec<u8>;
     fn trailer(&self) -> &Self::Trailer;
 }
 
 #[derive(Clone, Default)]
-pub struct UnicodeBlock {
+pub struct UnicodeDataBlock {
     encoding: NdbCryptMethod,
     data: Vec<u8>,
     trailer: UnicodeBlockTrailer,
 }
 
-impl DataBlock for UnicodeBlock {
+impl DataBlock for UnicodeDataBlock {
     type Trailer = UnicodeBlockTrailer;
 
-    fn new(encoding: NdbCryptMethod, data: Vec<u8>, trailer: UnicodeBlockTrailer) -> Self {
-        Self {
+    fn new(
+        encoding: NdbCryptMethod,
+        data: Vec<u8>,
+        trailer: UnicodeBlockTrailer,
+    ) -> NdbResult<Self> {
+        let block_id = trailer.block_id();
+        if block_id.is_internal() {
+            return Err(NdbError::InvalidUnicodeBlockTrailerId(u64::from(block_id)));
+        }
+
+        Ok(Self {
             data,
             encoding,
             trailer,
-        }
+        })
     }
 
     fn encoding(&self) -> NdbCryptMethod {
@@ -286,10 +289,6 @@ impl DataBlock for UnicodeBlock {
 
     fn data(&self) -> &[u8] {
         &self.data
-    }
-
-    fn data_mut(&mut self) -> &mut Vec<u8> {
-        &mut self.data
     }
 
     fn trailer(&self) -> &UnicodeBlockTrailer {
@@ -298,21 +297,26 @@ impl DataBlock for UnicodeBlock {
 }
 
 #[derive(Clone, Default)]
-pub struct AnsiBlock {
+pub struct AnsiDataBlock {
     encoding: NdbCryptMethod,
     data: Vec<u8>,
     trailer: AnsiBlockTrailer,
 }
 
-impl DataBlock for AnsiBlock {
+impl DataBlock for AnsiDataBlock {
     type Trailer = AnsiBlockTrailer;
 
-    fn new(encoding: NdbCryptMethod, data: Vec<u8>, trailer: AnsiBlockTrailer) -> Self {
-        Self {
+    fn new(encoding: NdbCryptMethod, data: Vec<u8>, trailer: AnsiBlockTrailer) -> NdbResult<Self> {
+        let block_id = trailer.block_id();
+        if block_id.is_internal() {
+            return Err(NdbError::InvalidAnsiBlockTrailerId(u32::from(block_id)));
+        }
+
+        Ok(Self {
             data,
             encoding,
             trailer,
-        }
+        })
     }
 
     fn encoding(&self) -> NdbCryptMethod {
@@ -321,10 +325,6 @@ impl DataBlock for AnsiBlock {
 
     fn data(&self) -> &[u8] {
         &self.data
-    }
-
-    fn data_mut(&mut self) -> &mut Vec<u8> {
-        &mut self.data
     }
 
     fn trailer(&self) -> &AnsiBlockTrailer {

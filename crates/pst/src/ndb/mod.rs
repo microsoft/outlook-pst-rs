@@ -84,6 +84,10 @@ pub enum NdbError {
     InvalidBlockSize(u16),
     #[error("Invalid BLOCKTRAILER dwCRC: 0x{0:08X}")]
     InvalidBlockCrc(u32),
+    #[error("Invalid BLOCKTRAILER bid: 0x{0:016X}")]
+    InvalidUnicodeBlockTrailerId(u64),
+    #[error("Invalid BLOCKTRAILER bid: 0x{0:08X}")]
+    InvalidAnsiBlockTrailerId(u32),
 }
 
 impl From<NdbError> for io::Error {
@@ -101,7 +105,7 @@ pub mod byte_index;
 pub mod node_id;
 pub mod page;
 
-use block::*;
+//use block::*;
 use block_id::*;
 use block_ref::*;
 use byte_index::*;
