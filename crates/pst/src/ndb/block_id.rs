@@ -3,14 +3,11 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, Read, Write};
 
-use super::*;
+use super::{*, read_write::*};
 
-pub trait BlockId: Sized + Copy {
-    type Index: Copy;
+pub trait BlockId {
+    type Index: Copy + Sized;
 
-    fn new(is_internal: bool, index: Self::Index) -> NdbResult<Self>;
-    fn read(f: &mut dyn Read) -> io::Result<Self>;
-    fn write(&self, f: &mut dyn Write) -> io::Result<()>;
     fn is_internal(&self) -> bool;
     fn index(&self) -> Self::Index;
 }
@@ -23,6 +20,16 @@ pub struct UnicodeBlockId(u64);
 impl BlockId for UnicodeBlockId {
     type Index = u64;
 
+    fn is_internal(&self) -> bool {
+        self.0 & 0x2 == 0x2
+    }
+
+    fn index(&self) -> u64 {
+        self.0 >> 2
+    }
+}
+
+impl BlockIdReadWrite for UnicodeBlockId {
     fn new(is_internal: bool, index: u64) -> NdbResult<Self> {
         let is_internal = if is_internal { 0x2 } else { 0x0 };
 
@@ -41,14 +48,6 @@ impl BlockId for UnicodeBlockId {
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         f.write_u64::<LittleEndian>(self.0)
-    }
-
-    fn is_internal(&self) -> bool {
-        self.0 & 0x2 == 0x2
-    }
-
-    fn index(&self) -> u64 {
-        self.0 >> 2
     }
 }
 
@@ -72,6 +71,16 @@ pub struct AnsiBlockId(u32);
 impl BlockId for AnsiBlockId {
     type Index = u32;
 
+    fn is_internal(&self) -> bool {
+        self.0 & 0x2 == 0x2
+    }
+
+    fn index(&self) -> u32 {
+        self.0 >> 2
+    }
+}
+
+impl BlockIdReadWrite for AnsiBlockId {
     fn new(is_internal: bool, index: u32) -> NdbResult<Self> {
         let is_internal = if is_internal { 0x2 } else { 0x0 };
 
@@ -90,14 +99,6 @@ impl BlockId for AnsiBlockId {
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         f.write_u32::<LittleEndian>(self.0)
-    }
-
-    fn is_internal(&self) -> bool {
-        self.0 & 0x2 == 0x2
-    }
-
-    fn index(&self) -> u32 {
-        self.0 >> 2
     }
 }
 

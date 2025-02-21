@@ -1,6 +1,6 @@
 use clap::Parser;
 use outlook_pst::{
-    ndb::{Header, Root},
+    ndb::{header::Header, root::Root},
     *,
 };
 

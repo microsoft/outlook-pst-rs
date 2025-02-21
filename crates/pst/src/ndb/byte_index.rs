@@ -3,12 +3,11 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, Read, Write};
 
-pub trait ByteIndex: Sized + Copy {
-    type Index: Copy;
+use super::read_write::*;
 
-    fn new(index: Self::Index) -> Self;
-    fn read(f: &mut dyn Read) -> io::Result<Self>;
-    fn write(&self, f: &mut dyn Write) -> io::Result<()>;
+pub trait ByteIndex {
+    type Index: Copy + Sized;
+
     fn index(&self) -> Self::Index;
 }
 
@@ -18,6 +17,12 @@ pub struct UnicodeByteIndex(u64);
 impl ByteIndex for UnicodeByteIndex {
     type Index = u64;
 
+    fn index(&self) -> u64 {
+        self.0
+    }
+}
+
+impl ByteIndexReadWrite for UnicodeByteIndex {
     fn new(index: u64) -> Self {
         Self(index)
     }
@@ -30,10 +35,6 @@ impl ByteIndex for UnicodeByteIndex {
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         f.write_u64::<LittleEndian>(self.0)
     }
-
-    fn index(&self) -> u64 {
-        self.0
-    }
 }
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -42,6 +43,12 @@ pub struct AnsiByteIndex(u32);
 impl ByteIndex for AnsiByteIndex {
     type Index = u32;
 
+    fn index(&self) -> u32 {
+        self.0
+    }
+}
+
+impl ByteIndexReadWrite for AnsiByteIndex {
     fn new(index: u32) -> Self {
         Self(index)
     }
@@ -53,9 +60,5 @@ impl ByteIndex for AnsiByteIndex {
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         f.write_u32::<LittleEndian>(self.0)
-    }
-
-    fn index(&self) -> u32 {
-        self.0
     }
 }

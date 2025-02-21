@@ -2,11 +2,12 @@ use clap::Parser;
 use outlook_pst::{
     ndb::{
         block_ref::UnicodeBlockRef,
+        header::Header,
         page::{
             BTreePage, BTreePageEntry, BlockBTreeEntry, NodeBTreeEntry, UnicodeBlockBTree,
             UnicodeNodeBTree,
         },
-        Header, Root,
+        root::Root,
     },
     *,
 };
