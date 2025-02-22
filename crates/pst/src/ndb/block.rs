@@ -23,13 +23,14 @@ pub const fn block_size(size: u16) -> u16 {
 
 /// [BLOCKTRAILER](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/a14943ef-70c2-403f-898c-5bc3747117e1)
 pub trait BlockTrailer {
-    type BlockId: BlockIdReadWrite;
+    type BlockId: BlockId;
 
     fn size(&self) -> u16;
     fn signature(&self) -> u16;
     fn crc(&self) -> u32;
     fn block_id(&self) -> Self::BlockId;
     fn cyclic_key(&self) -> u32;
+    fn verify_block_id(&self, is_internal: bool) -> NdbResult<()>;
 }
 
 #[derive(Clone, Copy, Default)]
@@ -38,6 +39,21 @@ pub struct UnicodeBlockTrailer {
     signature: u16,
     crc: u32,
     block_id: UnicodeBlockId,
+}
+
+impl UnicodeBlockTrailer {
+    pub fn new(size: u16, signature: u16, crc: u32, block_id: UnicodeBlockId) -> NdbResult<Self> {
+        if !(1..=(MAX_BLOCK_SIZE - Self::SIZE)).contains(&size) {
+            return Err(NdbError::InvalidBlockSize(size));
+        }
+
+        Ok(Self {
+            size,
+            block_id,
+            signature,
+            crc,
+        })
+    }
 }
 
 impl BlockTrailer for UnicodeBlockTrailer {
@@ -62,22 +78,22 @@ impl BlockTrailer for UnicodeBlockTrailer {
     fn cyclic_key(&self) -> u32 {
         u64::from(self.block_id) as u32
     }
+
+    fn verify_block_id(&self, is_internal: bool) -> NdbResult<()> {
+        if self.block_id.is_internal() != is_internal {
+            return Err(NdbError::InvalidUnicodeBlockTrailerId(u64::from(
+                self.block_id,
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl BlockTrailerReadWrite for UnicodeBlockTrailer {
     const SIZE: u16 = 16;
 
     fn new(size: u16, signature: u16, crc: u32, block_id: UnicodeBlockId) -> NdbResult<Self> {
-        if !(1..=(MAX_BLOCK_SIZE - Self::SIZE)).contains(&size) {
-            return Err(NdbError::InvalidBlockSize(size));
-        }
-
-        Ok(Self {
-            size,
-            block_id,
-            signature,
-            crc,
-        })
+        Self::new(size, signature, crc, block_id)
     }
 
     fn read(f: &mut dyn Read) -> io::Result<Self> {
@@ -104,15 +120,6 @@ impl BlockTrailerReadWrite for UnicodeBlockTrailer {
         f.write_u32::<LittleEndian>(self.crc)?;
         self.block_id.write(f)
     }
-
-    fn verify_block_id(&self, is_internal: bool) -> NdbResult<()> {
-        if self.block_id.is_internal() != is_internal {
-            return Err(NdbError::InvalidUnicodeBlockTrailerId(u64::from(
-                self.block_id,
-            )));
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -121,6 +128,21 @@ pub struct AnsiBlockTrailer {
     signature: u16,
     block_id: AnsiBlockId,
     crc: u32,
+}
+
+impl AnsiBlockTrailer {
+    pub fn new(size: u16, signature: u16, crc: u32, block_id: AnsiBlockId) -> NdbResult<Self> {
+        if !(1..=(MAX_BLOCK_SIZE - Self::SIZE)).contains(&size) {
+            return Err(NdbError::InvalidBlockSize(size));
+        }
+
+        Ok(Self {
+            size,
+            signature,
+            block_id,
+            crc,
+        })
+    }
 }
 
 impl BlockTrailer for AnsiBlockTrailer {
@@ -145,22 +167,22 @@ impl BlockTrailer for AnsiBlockTrailer {
     fn cyclic_key(&self) -> u32 {
         u32::from(self.block_id)
     }
+
+    fn verify_block_id(&self, is_internal: bool) -> NdbResult<()> {
+        if self.block_id.is_internal() != is_internal {
+            return Err(NdbError::InvalidAnsiBlockTrailerId(u32::from(
+                self.block_id,
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl BlockTrailerReadWrite for AnsiBlockTrailer {
     const SIZE: u16 = 12;
 
     fn new(size: u16, signature: u16, crc: u32, block_id: AnsiBlockId) -> NdbResult<Self> {
-        if !(1..=(MAX_BLOCK_SIZE - Self::SIZE)).contains(&size) {
-            return Err(NdbError::InvalidBlockSize(size));
-        }
-
-        Ok(Self {
-            size,
-            signature,
-            block_id,
-            crc,
-        })
+        Self::new(size, signature, crc, block_id)
     }
 
     fn read(f: &mut dyn Read) -> io::Result<Self> {
@@ -187,20 +209,11 @@ impl BlockTrailerReadWrite for AnsiBlockTrailer {
         self.block_id.write(f)?;
         f.write_u32::<LittleEndian>(self.crc)
     }
-
-    fn verify_block_id(&self, is_internal: bool) -> NdbResult<()> {
-        if self.block_id.is_internal() != is_internal {
-            return Err(NdbError::InvalidAnsiBlockTrailerId(u32::from(
-                self.block_id,
-            )));
-        }
-        Ok(())
-    }
 }
 
 /// [Data Blocks](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/d0e6fbaf-00e3-4d4d-bea8-8ab3cdb4fde6)
 pub trait Block {
-    type Trailer: BlockTrailerReadWrite;
+    type Trailer: BlockTrailer;
 
     fn encoding(&self) -> NdbCryptMethod;
     fn data(&self) -> &[u8];
@@ -212,6 +225,22 @@ pub struct UnicodeDataBlock {
     encoding: NdbCryptMethod,
     data: Vec<u8>,
     trailer: UnicodeBlockTrailer,
+}
+
+impl UnicodeDataBlock {
+    pub fn new(
+        encoding: NdbCryptMethod,
+        data: Vec<u8>,
+        trailer: UnicodeBlockTrailer,
+    ) -> NdbResult<Self> {
+        trailer.verify_block_id(false)?;
+
+        Ok(Self {
+            data,
+            encoding,
+            trailer,
+        })
+    }
 }
 
 impl Block for UnicodeDataBlock {
@@ -236,13 +265,7 @@ impl BlockReadWrite for UnicodeDataBlock {
         data: Vec<u8>,
         trailer: UnicodeBlockTrailer,
     ) -> NdbResult<Self> {
-        trailer.verify_block_id(false)?;
-
-        Ok(Self {
-            data,
-            encoding,
-            trailer,
-        })
+        Self::new(encoding, data, trailer)
     }
 }
 
@@ -251,6 +274,22 @@ pub struct AnsiDataBlock {
     encoding: NdbCryptMethod,
     data: Vec<u8>,
     trailer: AnsiBlockTrailer,
+}
+
+impl AnsiDataBlock {
+    pub fn new(
+        encoding: NdbCryptMethod,
+        data: Vec<u8>,
+        trailer: AnsiBlockTrailer,
+    ) -> NdbResult<Self> {
+        trailer.verify_block_id(false)?;
+
+        Ok(Self {
+            data,
+            encoding,
+            trailer,
+        })
+    }
 }
 
 impl Block for AnsiDataBlock {
@@ -271,13 +310,7 @@ impl Block for AnsiDataBlock {
 
 impl BlockReadWrite for AnsiDataBlock {
     fn new(encoding: NdbCryptMethod, data: Vec<u8>, trailer: AnsiBlockTrailer) -> NdbResult<Self> {
-        trailer.verify_block_id(false)?;
-
-        Ok(Self {
-            data,
-            encoding,
-            trailer,
-        })
+        Self::new(encoding, data, trailer)
     }
 }
 
@@ -286,10 +319,12 @@ pub trait IntermediateTreeHeader {
     fn entry_count(&self) -> u16;
 }
 
+pub trait IntermediateTreeEntry {}
+
 pub trait IntermediateTreeBlock {
-    type Header: IntermediateTreeHeaderReadWrite;
-    type Entry: IntermediateTreeEntryReadWrite;
-    type Trailer: BlockTrailerReadWrite;
+    type Header: IntermediateTreeHeader;
+    type Entry: IntermediateTreeEntry;
+    type Trailer: BlockTrailer;
 
     fn header(&self) -> &Self::Header;
     fn entries(&self) -> &[Self::Entry];
@@ -358,6 +393,18 @@ impl IntermediateTreeHeaderReadWrite for DataTreeBlockHeader {
 #[derive(Clone, Copy, Default)]
 pub struct UnicodeDataTreeEntry(UnicodeBlockId);
 
+impl UnicodeDataTreeEntry {
+    pub fn new(block: UnicodeBlockId) -> Self {
+        Self(block)
+    }
+
+    pub fn block(&self) -> UnicodeBlockId {
+        self.0
+    }
+}
+
+impl IntermediateTreeEntry for UnicodeDataTreeEntry {}
+
 impl IntermediateTreeEntryReadWrite for UnicodeDataTreeEntry {
     const ENTRY_SIZE: u16 = 8;
 
@@ -372,18 +419,30 @@ impl IntermediateTreeEntryReadWrite for UnicodeDataTreeEntry {
 
 impl From<UnicodeBlockId> for UnicodeDataTreeEntry {
     fn from(value: UnicodeBlockId) -> Self {
-        Self(value)
+        Self::new(value)
     }
 }
 
 impl From<UnicodeDataTreeEntry> for UnicodeBlockId {
     fn from(value: UnicodeDataTreeEntry) -> Self {
-        value.0
+        value.block()
     }
 }
 
 #[derive(Clone, Copy, Default)]
 pub struct AnsiDataTreeEntry(AnsiBlockId);
+
+impl AnsiDataTreeEntry {
+    pub fn new(block: AnsiBlockId) -> Self {
+        Self(block)
+    }
+
+    pub fn block(&self) -> AnsiBlockId {
+        self.0
+    }
+}
+
+impl IntermediateTreeEntry for AnsiDataTreeEntry {}
 
 impl IntermediateTreeEntryReadWrite for AnsiDataTreeEntry {
     const ENTRY_SIZE: u16 = 4;
@@ -399,13 +458,13 @@ impl IntermediateTreeEntryReadWrite for AnsiDataTreeEntry {
 
 impl From<AnsiBlockId> for AnsiDataTreeEntry {
     fn from(value: AnsiBlockId) -> Self {
-        Self(value)
+        Self::new(value)
     }
 }
 
 impl From<AnsiDataTreeEntry> for AnsiBlockId {
     fn from(value: AnsiDataTreeEntry) -> Self {
-        value.0
+        value.block()
     }
 }
 
@@ -413,18 +472,38 @@ impl From<AnsiDataTreeEntry> for AnsiBlockId {
 /// / [XXBLOCK](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/061b6ac4-d1da-468c-b75d-0303a0a8f468)
 pub struct DataTreeBlock<Entry, Trailer>
 where
-    Entry: IntermediateTreeEntryReadWrite,
-    Trailer: BlockTrailerReadWrite,
+    Entry: IntermediateTreeEntry,
+    Trailer: BlockTrailer,
 {
     header: DataTreeBlockHeader,
     entries: Vec<Entry>,
     trailer: Trailer,
 }
 
+impl<Entry, Trailer> DataTreeBlock<Entry, Trailer>
+where
+    Entry: IntermediateTreeEntry,
+    Trailer: BlockTrailer,
+{
+    pub fn new(
+        header: DataTreeBlockHeader,
+        entries: Vec<Entry>,
+        trailer: Trailer,
+    ) -> NdbResult<Self> {
+        trailer.verify_block_id(true)?;
+
+        Ok(Self {
+            header,
+            entries,
+            trailer,
+        })
+    }
+}
+
 impl<Entry, Trailer> IntermediateTreeBlock for DataTreeBlock<Entry, Trailer>
 where
-    Entry: IntermediateTreeEntryReadWrite,
-    Trailer: BlockTrailerReadWrite,
+    Entry: IntermediateTreeEntry,
+    Trailer: BlockTrailer,
 {
     type Header = DataTreeBlockHeader;
     type Entry = Entry;
@@ -449,13 +528,7 @@ where
     Trailer: BlockTrailerReadWrite,
 {
     fn new(header: DataTreeBlockHeader, entries: Vec<Entry>, trailer: Trailer) -> NdbResult<Self> {
-        trailer.verify_block_id(true)?;
-
-        Ok(Self {
-            header,
-            entries,
-            trailer,
-        })
+        Self::new(header, entries, trailer)
     }
 }
 
@@ -463,29 +536,32 @@ pub type UnicodeDataTreeBlock = DataTreeBlock<UnicodeDataTreeEntry, UnicodeBlock
 pub type AnsiDataTreeBlock = DataTreeBlock<AnsiDataTreeEntry, AnsiBlockTrailer>;
 
 #[derive(Clone, Copy, Default)]
-pub struct SubNodeTreeBlockHeader<const PADDING: bool> {
+struct SubNodeTreeBlockHeader {
     level: u8,
     entry_count: u16,
 }
 
-impl<const PADDING: bool> SubNodeTreeBlockHeader<PADDING> {
+#[derive(Clone, Copy, Default)]
+pub struct UnicodeSubNodeTreeBlockHeader(SubNodeTreeBlockHeader);
+
+impl UnicodeSubNodeTreeBlockHeader {
     pub fn new(level: u8, entry_count: u16) -> Self {
-        Self { level, entry_count }
+        Self(SubNodeTreeBlockHeader { level, entry_count })
     }
 }
 
-impl<const PADDING: bool> IntermediateTreeHeader for SubNodeTreeBlockHeader<PADDING> {
+impl IntermediateTreeHeader for UnicodeSubNodeTreeBlockHeader {
     fn level(&self) -> u8 {
-        self.level
+        self.0.level
     }
 
     fn entry_count(&self) -> u16 {
-        self.entry_count
+        self.0.entry_count
     }
 }
 
-impl<const PADDING: bool> IntermediateTreeHeaderReadWrite for SubNodeTreeBlockHeader<PADDING> {
-    const HEADER_SIZE: u16 = if PADDING { 8 } else { 4 };
+impl IntermediateTreeHeaderReadWrite for UnicodeSubNodeTreeBlockHeader {
+    const HEADER_SIZE: u16 = 8;
 
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let block_type = f.read_u8()?;
@@ -496,47 +572,78 @@ impl<const PADDING: bool> IntermediateTreeHeaderReadWrite for SubNodeTreeBlockHe
         let level = f.read_u8()?;
         let entry_count = f.read_u16::<LittleEndian>()?;
 
-        if PADDING {
-            let padding = f.read_u32::<LittleEndian>()?;
-            if padding != 0 {
-                return Err(NdbError::InvalidSubNodeBlockPadding(padding).into());
-            }
+        let padding = f.read_u32::<LittleEndian>()?;
+        if padding != 0 {
+            return Err(NdbError::InvalidSubNodeBlockPadding(padding).into());
         }
 
-        Ok(Self { level, entry_count })
+        Ok(Self::new(level, entry_count))
     }
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         f.write_u8(0x02)?;
-        f.write_u8(self.level)?;
-        f.write_u16::<LittleEndian>(self.entry_count)?;
-
-        if PADDING {
-            f.write_u32::<LittleEndian>(0)?;
-        }
-
-        Ok(())
+        f.write_u8(self.level())?;
+        f.write_u16::<LittleEndian>(self.entry_count())?;
+        f.write_u32::<LittleEndian>(0)
     }
 }
 
-pub type UnicodeSubNodeTreeBlockHeader = SubNodeTreeBlockHeader<true>;
-pub type AnsiSubNodeTreeBlockHeader = SubNodeTreeBlockHeader<false>;
+#[derive(Clone, Copy, Default)]
+pub struct AnsiSubNodeTreeBlockHeader(SubNodeTreeBlockHeader);
+
+impl AnsiSubNodeTreeBlockHeader {
+    pub fn new(level: u8, entry_count: u16) -> Self {
+        Self(SubNodeTreeBlockHeader { level, entry_count })
+    }
+}
+
+impl IntermediateTreeHeader for AnsiSubNodeTreeBlockHeader {
+    fn level(&self) -> u8 {
+        self.0.level
+    }
+
+    fn entry_count(&self) -> u16 {
+        self.0.entry_count
+    }
+}
+
+impl IntermediateTreeHeaderReadWrite for AnsiSubNodeTreeBlockHeader {
+    const HEADER_SIZE: u16 = 4;
+
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let block_type = f.read_u8()?;
+        if block_type != 0x02 {
+            return Err(NdbError::InvalidInternalBlockType(block_type).into());
+        }
+
+        let level = f.read_u8()?;
+        let entry_count = f.read_u16::<LittleEndian>()?;
+
+        Ok(Self::new(level, entry_count))
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        f.write_u8(0x02)?;
+        f.write_u8(self.level())?;
+        f.write_u16::<LittleEndian>(self.entry_count())
+    }
+}
 
 /// [SLENTRY (Leaf Block Entry)](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/85c4d943-0779-43c5-bd98-61dc9bb5dfd6)
 #[derive(Clone, Copy, Default)]
-pub struct LeafSubNodeTreeEntry<BlockId>
+pub struct LeafSubNodeTreeEntry<Block>
 where
-    BlockId: BlockIdReadWrite,
+    Block: BlockId,
 {
-    inner: IntermediateSubNodeTreeEntry<BlockId>,
-    sub_node: Option<BlockId>,
+    inner: IntermediateSubNodeTreeEntry<Block>,
+    sub_node: Option<Block>,
 }
 
-impl<BlockId> LeafSubNodeTreeEntry<BlockId>
+impl<Block> LeafSubNodeTreeEntry<Block>
 where
-    BlockId: BlockIdReadWrite,
+    Block: BlockId,
 {
-    pub fn new(node: NodeId, block: BlockId, sub_node: Option<BlockId>) -> Self {
+    pub fn new(node: NodeId, block: Block, sub_node: Option<Block>) -> Self {
         Self {
             inner: IntermediateSubNodeTreeEntry::new(node, block),
             sub_node,
@@ -547,17 +654,19 @@ where
         self.inner.node()
     }
 
-    pub fn block(&self) -> BlockId {
+    pub fn block(&self) -> Block {
         self.inner.block()
     }
 
-    pub fn sub_node(&self) -> Option<BlockId> {
+    pub fn sub_node(&self) -> Option<Block> {
         self.sub_node
     }
 }
 
 pub type UnicodeLeafSubNodeTreeEntry = LeafSubNodeTreeEntry<UnicodeBlockId>;
 pub type AnsiLeafSubNodeTreeEntry = LeafSubNodeTreeEntry<AnsiBlockId>;
+
+impl IntermediateTreeEntry for UnicodeLeafSubNodeTreeEntry {}
 
 impl IntermediateTreeEntryReadWrite for UnicodeLeafSubNodeTreeEntry {
     const ENTRY_SIZE: u16 = 24;
@@ -579,6 +688,8 @@ impl IntermediateTreeEntryReadWrite for UnicodeLeafSubNodeTreeEntry {
         self.sub_node.unwrap_or_default().write(f)
     }
 }
+
+impl IntermediateTreeEntry for AnsiLeafSubNodeTreeEntry {}
 
 impl IntermediateTreeEntryReadWrite for AnsiLeafSubNodeTreeEntry {
     const ENTRY_SIZE: u16 = 12;
@@ -603,19 +714,19 @@ impl IntermediateTreeEntryReadWrite for AnsiLeafSubNodeTreeEntry {
 
 /// [SIENTRY (Intermediate Block Entry)](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/9e79c673-d2f4-49fb-a00b-51b08fd2d1e4)
 #[derive(Clone, Copy, Default)]
-pub struct IntermediateSubNodeTreeEntry<BlockId>
+pub struct IntermediateSubNodeTreeEntry<Block>
 where
-    BlockId: BlockIdReadWrite,
+    Block: BlockId,
 {
     node: NodeId,
-    block: BlockId,
+    block: Block,
 }
 
-impl<BlockId> IntermediateSubNodeTreeEntry<BlockId>
+impl<Block> IntermediateSubNodeTreeEntry<Block>
 where
-    BlockId: BlockIdReadWrite,
+    Block: BlockId,
 {
-    pub fn new(node: NodeId, block: BlockId) -> Self {
+    pub fn new(node: NodeId, block: Block) -> Self {
         Self { node, block }
     }
 
@@ -623,13 +734,15 @@ where
         self.node
     }
 
-    pub fn block(&self) -> BlockId {
+    pub fn block(&self) -> Block {
         self.block
     }
 }
 
 pub type UnicodeIntermediateSubNodeTreeEntry = IntermediateSubNodeTreeEntry<UnicodeBlockId>;
 pub type AnsiIntermediateSubNodeTreeEntry = IntermediateSubNodeTreeEntry<AnsiBlockId>;
+
+impl IntermediateTreeEntry for UnicodeIntermediateSubNodeTreeEntry {}
 
 impl IntermediateTreeEntryReadWrite for UnicodeIntermediateSubNodeTreeEntry {
     const ENTRY_SIZE: u16 = 16;
@@ -648,6 +761,8 @@ impl IntermediateTreeEntryReadWrite for UnicodeIntermediateSubNodeTreeEntry {
         self.block.write(f)
     }
 }
+
+impl IntermediateTreeEntry for AnsiIntermediateSubNodeTreeEntry {}
 
 impl IntermediateTreeEntryReadWrite for AnsiIntermediateSubNodeTreeEntry {
     const ENTRY_SIZE: u16 = 8;
@@ -668,20 +783,37 @@ impl IntermediateTreeEntryReadWrite for AnsiIntermediateSubNodeTreeEntry {
 /// / [SIBLOCK](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/729fb9bd-060a-4bbc-9b3b-8f014b487dad)
 pub struct SubNodeTreeBlock<Header, Entry, Trailer>
 where
-    Header: IntermediateTreeHeaderReadWrite,
-    Entry: IntermediateTreeEntryReadWrite,
-    Trailer: BlockTrailerReadWrite,
+    Header: IntermediateTreeHeader,
+    Entry: IntermediateTreeEntry,
+    Trailer: BlockTrailer,
 {
     header: Header,
     entries: Vec<Entry>,
     trailer: Trailer,
 }
 
+impl<Header, Entry, Trailer> SubNodeTreeBlock<Header, Entry, Trailer>
+where
+    Header: IntermediateTreeHeader,
+    Entry: IntermediateTreeEntry,
+    Trailer: BlockTrailer,
+{
+    pub fn new(header: Header, entries: Vec<Entry>, trailer: Trailer) -> NdbResult<Self> {
+        trailer.verify_block_id(true)?;
+
+        Ok(Self {
+            header,
+            entries,
+            trailer,
+        })
+    }
+}
+
 impl<Header, Entry, Trailer> IntermediateTreeBlock for SubNodeTreeBlock<Header, Entry, Trailer>
 where
-    Header: IntermediateTreeHeaderReadWrite,
-    Entry: IntermediateTreeEntryReadWrite,
-    Trailer: BlockTrailerReadWrite,
+    Header: IntermediateTreeHeader,
+    Entry: IntermediateTreeEntry,
+    Trailer: BlockTrailer,
 {
     type Header = Header;
     type Entry = Entry;
@@ -708,13 +840,7 @@ where
     Trailer: BlockTrailerReadWrite,
 {
     fn new(header: Header, entries: Vec<Entry>, trailer: Trailer) -> NdbResult<Self> {
-        trailer.verify_block_id(true)?;
-
-        Ok(Self {
-            header,
-            entries,
-            trailer,
-        })
+        Self::new(header, entries, trailer)
     }
 }
 

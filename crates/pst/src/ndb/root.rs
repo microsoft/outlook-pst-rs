@@ -38,8 +38,8 @@ impl From<AmapStatus> for bool {
 }
 
 pub trait Root {
-    type Index: ByteIndexReadWrite;
-    type BTreeRef: BlockRefReadWrite;
+    type Index: ByteIndex;
+    type BTreeRef: BlockRef;
 
     fn file_eof_index(&self) -> &Self::Index;
     fn amap_last_index(&self) -> &Self::Index;
@@ -61,6 +61,31 @@ pub struct UnicodeRoot {
     amap_is_valid: AmapStatus,
     reserved2: u8,
     reserved3: u16,
+}
+
+impl UnicodeRoot {
+    pub fn new(
+        file_eof_index: UnicodeByteIndex,
+        amap_last_index: UnicodeByteIndex,
+        amap_free_size: UnicodeByteIndex,
+        pmap_free_size: UnicodeByteIndex,
+        node_btree: UnicodeBlockRef,
+        block_btree: UnicodeBlockRef,
+        amap_is_valid: AmapStatus,
+    ) -> Self {
+        Self {
+            reserved1: Default::default(),
+            file_eof_index,
+            amap_last_index,
+            amap_free_size,
+            pmap_free_size,
+            node_btree,
+            block_btree,
+            amap_is_valid,
+            reserved2: Default::default(),
+            reserved3: Default::default(),
+        }
+    }
 }
 
 impl Root for UnicodeRoot {
@@ -106,8 +131,7 @@ impl RootReadWrite for UnicodeRoot {
         block_btree: UnicodeBlockRef,
         amap_is_valid: AmapStatus,
     ) -> Self {
-        Self {
-            reserved1: Default::default(),
+        Self::new(
             file_eof_index,
             amap_last_index,
             amap_free_size,
@@ -115,9 +139,7 @@ impl RootReadWrite for UnicodeRoot {
             node_btree,
             block_btree,
             amap_is_valid,
-            reserved2: Default::default(),
-            reserved3: Default::default(),
-        }
+        )
     }
 
     fn load_reserved(&mut self, reserved1: u32, reserved2: u8, reserved3: u16) {
@@ -150,6 +172,31 @@ pub struct AnsiRoot {
     reserved1: u32,
     reserved2: u8,
     reserved3: u16,
+}
+
+impl AnsiRoot {
+    pub fn new(
+        file_eof_index: AnsiByteIndex,
+        amap_last_index: AnsiByteIndex,
+        amap_free_size: AnsiByteIndex,
+        pmap_free_size: AnsiByteIndex,
+        node_btree: AnsiBlockRef,
+        block_btree: AnsiBlockRef,
+        amap_is_valid: AmapStatus,
+    ) -> Self {
+        Self {
+            reserved1: Default::default(),
+            file_eof_index,
+            amap_last_index,
+            amap_free_size,
+            pmap_free_size,
+            node_btree,
+            block_btree,
+            amap_is_valid,
+            reserved2: Default::default(),
+            reserved3: Default::default(),
+        }
+    }
 }
 
 impl Root for AnsiRoot {
@@ -195,8 +242,7 @@ impl RootReadWrite for AnsiRoot {
         block_btree: AnsiBlockRef,
         amap_is_valid: AmapStatus,
     ) -> Self {
-        Self {
-            reserved1: Default::default(),
+        Self::new(
             file_eof_index,
             amap_last_index,
             amap_free_size,
@@ -204,9 +250,7 @@ impl RootReadWrite for AnsiRoot {
             node_btree,
             block_btree,
             amap_is_valid,
-            reserved2: Default::default(),
-            reserved3: Default::default(),
-        }
+        )
     }
 
     fn load_reserved(&mut self, reserved1: u32, reserved2: u8, reserved3: u16) {

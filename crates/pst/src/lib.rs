@@ -24,7 +24,7 @@ pub struct PstFile {
 
 impl PstFile {
     pub fn read(path: impl AsRef<Path>) -> io::Result<Self> {
-        use ndb::read_write::DensityListPageReadWrite;
+        use ndb::read_write::{DensityListPageReadWrite, HeaderReadWrite};
 
         let mut file = File::open(path)?;
         file.seek(SeekFrom::Start(0))?;

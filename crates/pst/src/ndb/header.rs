@@ -107,7 +107,7 @@ impl TryFrom<u8> for NdbCryptMethod {
 }
 
 pub trait Header {
-    type Root: RootReadWrite;
+    type Root: Root;
 
     fn version(&self) -> NdbVersion;
     fn root(&self) -> &Self::Root;
@@ -128,6 +128,23 @@ pub struct UnicodeHeader {
     reserved3: [u8; 36],
 }
 
+impl UnicodeHeader {
+    pub fn new(root: UnicodeRoot, crypt_method: NdbCryptMethod) -> Self {
+        Self {
+            next_page: Default::default(),
+            unique: 0,
+            nids: NDB_DEFAULT_NIDS,
+            root,
+            crypt_method,
+            next_block: Default::default(),
+            reserved1: 0,
+            reserved2: 0,
+            unused: 0,
+            reserved3: [0; 36],
+        }
+    }
+}
+
 impl Header for UnicodeHeader {
     type Root = UnicodeRoot;
 
@@ -145,24 +162,7 @@ impl Header for UnicodeHeader {
 }
 
 impl HeaderReadWrite for UnicodeHeader {
-    fn new(root: UnicodeRoot, crypt_method: NdbCryptMethod) -> Self {
-        Self {
-            next_page: Default::default(),
-            unique: 0,
-            nids: NDB_DEFAULT_NIDS,
-            root,
-            crypt_method,
-            next_block: Default::default(),
-            reserved1: 0,
-            reserved2: 0,
-            unused: 0,
-            reserved3: [0; 36],
-        }
-    }
-}
-
-impl UnicodeHeader {
-    pub fn read(f: &mut dyn Read) -> io::Result<Self> {
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
         // dwMagic
         let magic = f.read_u32::<LittleEndian>()?;
         if magic != HEADER_MAGIC {
@@ -302,7 +302,7 @@ impl UnicodeHeader {
         })
     }
 
-    pub fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         let mut cursor = Cursor::new([0_u8; 516]);
         // wMagicClient
         cursor.write_u16::<LittleEndian>(HEADER_MAGIC_CLIENT)?;
@@ -379,6 +379,22 @@ pub struct AnsiHeader {
     reserved3: [u8; 36],
 }
 
+impl AnsiHeader {
+    pub fn new(root: AnsiRoot, crypt_method: NdbCryptMethod) -> Self {
+        Self {
+            next_block: Default::default(),
+            next_page: Default::default(),
+            unique: 0,
+            nids: NDB_DEFAULT_NIDS,
+            root,
+            crypt_method,
+            reserved1: 0,
+            reserved2: 0,
+            reserved3: [0; 36],
+        }
+    }
+}
+
 impl Header for AnsiHeader {
     type Root = AnsiRoot;
 
@@ -396,23 +412,7 @@ impl Header for AnsiHeader {
 }
 
 impl HeaderReadWrite for AnsiHeader {
-    fn new(root: AnsiRoot, crypt_method: NdbCryptMethod) -> Self {
-        Self {
-            next_block: Default::default(),
-            next_page: Default::default(),
-            unique: 0,
-            nids: NDB_DEFAULT_NIDS,
-            root,
-            crypt_method,
-            reserved1: 0,
-            reserved2: 0,
-            reserved3: [0; 36],
-        }
-    }
-}
-
-impl AnsiHeader {
-    pub fn read(f: &mut dyn Read) -> io::Result<Self> {
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
         // dwMagic
         let magic = f.read_u32::<LittleEndian>()?;
         if magic != HEADER_MAGIC {
@@ -529,7 +529,7 @@ impl AnsiHeader {
         })
     }
 
-    pub fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         let mut cursor = Cursor::new([0_u8; 504]);
         // wMagicClient
         cursor.write_u16::<LittleEndian>(HEADER_MAGIC_CLIENT)?;

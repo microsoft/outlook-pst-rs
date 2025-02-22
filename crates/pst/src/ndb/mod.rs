@@ -11,8 +11,9 @@ pub mod byte_index;
 pub mod header;
 pub mod node_id;
 pub mod page;
-pub mod read_write;
 pub mod root;
+
+pub(crate) mod read_write;
 
 use header::NdbCryptMethod;
 use page::PageType;

@@ -3,8 +3,8 @@
 use super::{block_id::*, byte_index::*, read_write::*};
 
 pub trait BlockRef {
-    type Block: BlockIdReadWrite;
-    type Index: ByteIndexReadWrite;
+    type Block: BlockId;
+    type Index: ByteIndex;
 
     fn block(&self) -> &Self::Block;
     fn index(&self) -> Self::Index;
@@ -14,6 +14,12 @@ pub trait BlockRef {
 pub struct UnicodeBlockRef {
     block: UnicodeBlockId,
     index: UnicodeByteIndex,
+}
+
+impl UnicodeBlockRef {
+    pub fn new(block: UnicodeBlockId, index: UnicodeByteIndex) -> Self {
+        Self { block, index }
+    }
 }
 
 impl BlockRef for UnicodeBlockRef {
@@ -31,7 +37,7 @@ impl BlockRef for UnicodeBlockRef {
 
 impl BlockRefReadWrite for UnicodeBlockRef {
     fn new(block: UnicodeBlockId, index: UnicodeByteIndex) -> Self {
-        Self { block, index }
+        Self::new(block, index)
     }
 }
 
@@ -39,6 +45,12 @@ impl BlockRefReadWrite for UnicodeBlockRef {
 pub struct AnsiBlockRef {
     block: AnsiBlockId,
     index: AnsiByteIndex,
+}
+
+impl AnsiBlockRef {
+    pub fn new(block: AnsiBlockId, index: AnsiByteIndex) -> Self {
+        Self { block, index }
+    }
 }
 
 impl BlockRef for AnsiBlockRef {
@@ -56,6 +68,6 @@ impl BlockRef for AnsiBlockRef {
 
 impl BlockRefReadWrite for AnsiBlockRef {
     fn new(block: AnsiBlockId, index: AnsiByteIndex) -> Self {
-        Self { block, index }
+        Self::new(block, index)
     }
 }

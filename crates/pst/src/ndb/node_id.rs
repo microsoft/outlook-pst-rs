@@ -3,7 +3,7 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, Read, Write};
 
-use super::*;
+use super::{read_write::NodeIdReadWrite, *};
 
 /// `nidType`
 ///
@@ -104,15 +104,6 @@ impl NodeId {
         Ok(Self(shifted_index | (u32::from(id_type))))
     }
 
-    pub fn read(f: &mut dyn Read) -> io::Result<Self> {
-        let value = f.read_u32::<LittleEndian>()?;
-        Ok(Self(value))
-    }
-
-    pub fn write(&self, f: &mut dyn Write) -> io::Result<()> {
-        f.write_u32::<LittleEndian>(self.0)
-    }
-
     pub fn id_type(&self) -> Result<NodeIdType, NdbError> {
         let nid_type = self.0 & 0x1F;
         NodeIdType::try_from(nid_type as u8)
@@ -120,6 +111,21 @@ impl NodeId {
 
     pub fn index(&self) -> u32 {
         self.0 >> 5
+    }
+}
+
+impl NodeIdReadWrite for NodeId {
+    fn new(id_type: NodeIdType, index: u32) -> NdbResult<Self> {
+        Self::new(id_type, index)
+    }
+
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let value = f.read_u32::<LittleEndian>()?;
+        Ok(Self(value))
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        f.write_u32::<LittleEndian>(self.0)
     }
 }
 

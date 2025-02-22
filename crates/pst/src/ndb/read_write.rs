@@ -1,16 +1,25 @@
+#![allow(dead_code)]
+
 use std::{
     cmp::Ordering,
     io::{self, Cursor, Read, Seek, SeekFrom, Write},
 };
 
-use super::{block::*, block_id::*, block_ref::*, byte_index::*, header::*, page::*, root::*, *};
+use super::{
+    block::*, block_id::*, block_ref::*, byte_index::*, header::*, node_id::*, page::*, root::*, *,
+};
 use crate::{
     crc::compute_crc,
     encode::{cyclic, permute},
 };
 
+pub trait NodeIdReadWrite: Copy + Sized {
+    fn new(id_type: NodeIdType, index: u32) -> NdbResult<Self>;
+    fn read(f: &mut dyn Read) -> io::Result<Self>;
+    fn write(&self, f: &mut dyn Write) -> io::Result<()>;
+}
+
 pub trait BlockIdReadWrite: BlockId + Copy + Sized {
-    fn new(is_internal: bool, index: Self::Index) -> NdbResult<Self>;
     fn read(f: &mut dyn Read) -> io::Result<Self>;
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
 }
@@ -21,7 +30,11 @@ pub trait ByteIndexReadWrite: ByteIndex + Copy + Sized {
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
 }
 
-pub trait BlockRefReadWrite: BlockRef + Copy + Sized {
+pub trait BlockRefReadWrite: BlockRef + Copy + Sized
+where
+    <Self as BlockRef>::Block: BlockIdReadWrite,
+    <Self as BlockRef>::Index: ByteIndexReadWrite,
+{
     fn new(block: Self::Block, index: Self::Index) -> Self;
 
     fn read(f: &mut dyn Read) -> io::Result<Self> {
@@ -36,7 +49,12 @@ pub trait BlockRefReadWrite: BlockRef + Copy + Sized {
     }
 }
 
-pub trait RootReadWrite: Root + Sized {
+pub trait RootReadWrite: Root + Sized
+where
+    <Self as Root>::Index: ByteIndexReadWrite,
+    <Self as Root>::BTreeRef:
+        BlockRef<Block: BlockIdReadWrite, Index: ByteIndexReadWrite> + BlockRefReadWrite,
+{
     fn new(
         file_eof_index: Self::Index,
         amap_last_index: Self::Index,
@@ -91,8 +109,16 @@ pub trait RootReadWrite: Root + Sized {
     }
 }
 
-pub trait HeaderReadWrite: Header + Sized {
-    fn new(root: Self::Root, crypt_method: NdbCryptMethod) -> Self;
+pub trait HeaderReadWrite: Header + Sized
+where
+    <Self as Header>::Root: Root<
+            Index: ByteIndexReadWrite,
+            BTreeRef: BlockRef<Block: BlockIdReadWrite, Index: ByteIndexReadWrite>
+                          + BlockRefReadWrite,
+        > + RootReadWrite,
+{
+    fn read(f: &mut dyn Read) -> io::Result<Self>;
+    fn write(&self, f: &mut dyn Write) -> io::Result<()>;
 }
 
 pub trait PageTrailerReadWrite: PageTrailer + Copy + Sized {
@@ -120,6 +146,39 @@ pub trait DensityListPageReadWrite: DensityListPage + Sized {
     fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()>;
 }
 
+pub trait BTreeEntryReadWrite: BTreeEntry + Copy + Sized + Default {
+    const ENTRY_SIZE: usize;
+
+    fn read(f: &mut dyn Read) -> io::Result<Self>;
+    fn write(&self, f: &mut dyn Write) -> io::Result<()>;
+}
+
+pub trait BlockBTreeEntryReadWrite: BlockBTreeEntry + Copy + Sized {
+    fn new(block: Self::Block, size: u16) -> Self;
+}
+
+pub trait BTreePageEntryReadWrite: BTreePageEntry
+where
+    Self: BTreeEntryReadWrite,
+    <Self as BTreePageEntry>::Key: BlockIdReadWrite,
+    <Self as BTreePageEntry>::Block:
+        BlockRef<Block: BlockIdReadWrite, Index: ByteIndexReadWrite> + BlockRefReadWrite,
+{
+    const ENTRY_SIZE: usize;
+
+    fn new(key: Self::Key, block: Self::Block) -> Self;
+    fn extend_key(node: NodeId) -> Self::Key;
+
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        Ok(Self::new(Self::Key::read(f)?, Self::Block::read(f)?))
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        self.key().write(f)?;
+        self.block().write(f)
+    }
+}
+
 pub trait BTreePageReadWrite: BTreePage + Sized {
     fn new(level: u8, entries: &[Self::Entry], trailer: Self::Trailer) -> NdbResult<Self>;
 }
@@ -129,7 +188,7 @@ pub const UNICODE_BTREE_ENTRIES_SIZE: usize = 488;
 pub trait UnicodeBTreePageReadWrite<Entry>:
     BTreePageReadWrite<Entry = Entry, Trailer = UnicodePageTrailer> + Sized
 where
-    Entry: BTreeEntry,
+    Entry: BTreeEntryReadWrite,
 {
     const MAX_BTREE_ENTRIES: usize = UNICODE_BTREE_ENTRIES_SIZE / Entry::ENTRY_SIZE;
 
@@ -187,7 +246,7 @@ where
         let mut cursor = Cursor::new(buffer);
         let mut entries = Vec::with_capacity(entry_count);
         for _ in 0..entry_count {
-            entries.push(<Self::Entry as BTreeEntry>::read(&mut cursor)?);
+            entries.push(<Self::Entry as BTreeEntryReadWrite>::read(&mut cursor)?);
         }
 
         Ok(<Self as BTreePageReadWrite>::new(level, &entries, trailer)?)
@@ -199,12 +258,12 @@ where
         // rgentries
         let entries = self.entries();
         for entry in entries.iter().take(Self::MAX_BTREE_ENTRIES) {
-            <Self::Entry as BTreeEntry>::write(entry, &mut cursor)?;
+            <Self::Entry as BTreeEntryReadWrite>::write(entry, &mut cursor)?;
         }
         if entries.len() < Self::MAX_BTREE_ENTRIES {
             let entry = Default::default();
             for _ in entries.len()..Self::MAX_BTREE_ENTRIES {
-                <Self::Entry as BTreeEntry>::write(&entry, &mut cursor)?;
+                <Self::Entry as BTreeEntryReadWrite>::write(&entry, &mut cursor)?;
             }
         }
 
@@ -246,7 +305,7 @@ pub const ANSI_BTREE_ENTRIES_SIZE: usize = 496;
 pub trait AnsiBTreePageReadWrite<Entry>:
     BTreePageReadWrite<Entry = Entry, Trailer = AnsiPageTrailer> + Sized
 where
-    Entry: BTreeEntry,
+    Entry: BTreeEntryReadWrite,
 {
     const MAX_BTREE_ENTRIES: usize = ANSI_BTREE_ENTRIES_SIZE / Entry::ENTRY_SIZE;
 
@@ -298,7 +357,7 @@ where
         let mut cursor = Cursor::new(buffer);
         let mut entries = Vec::with_capacity(entry_count);
         for _ in 0..entry_count {
-            entries.push(<Self::Entry as BTreeEntry>::read(&mut cursor)?);
+            entries.push(<Self::Entry as BTreeEntryReadWrite>::read(&mut cursor)?);
         }
 
         Ok(<Self as BTreePageReadWrite>::new(level, &entries, trailer)?)
@@ -310,12 +369,12 @@ where
         // rgentries
         let entries = self.entries();
         for entry in entries.iter().take(Self::MAX_BTREE_ENTRIES) {
-            <Self::Entry as BTreeEntry>::write(entry, &mut cursor)?;
+            <Self::Entry as BTreeEntryReadWrite>::write(entry, &mut cursor)?;
         }
         if entries.len() < Self::MAX_BTREE_ENTRIES {
             let entry = Default::default();
             for _ in entries.len()..Self::MAX_BTREE_ENTRIES {
-                <Self::Entry as BTreeEntry>::write(&entry, &mut cursor)?;
+                <Self::Entry as BTreeEntryReadWrite>::write(&entry, &mut cursor)?;
             }
         }
 
@@ -348,16 +407,27 @@ where
     }
 }
 
+pub trait NodeBTreeEntryReadWrite: NodeBTreeEntry + BTreeEntryReadWrite {
+    fn new(
+        node: NodeId,
+        data: <Self as NodeBTreeEntry>::Block,
+        sub_node: Option<<Self as NodeBTreeEntry>::Block>,
+        parent: Option<NodeId>,
+    ) -> Self;
+}
+
 pub trait BlockTrailerReadWrite: BlockTrailer + Copy + Sized {
     const SIZE: u16;
 
     fn new(size: u16, signature: u16, crc: u32, block_id: Self::BlockId) -> NdbResult<Self>;
     fn read(f: &mut dyn Read) -> io::Result<Self>;
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
-    fn verify_block_id(&self, is_internal: bool) -> NdbResult<()>;
 }
 
-pub trait BlockReadWrite: Block + Sized {
+pub trait BlockReadWrite: Block + Sized
+where
+    <Self as Block>::Trailer: BlockTrailerReadWrite,
+{
     fn new(encoding: NdbCryptMethod, data: Vec<u8>, trailer: Self::Trailer) -> NdbResult<Self>;
 
     fn read<R: Read + Seek>(f: &mut R, size: u16, encoding: NdbCryptMethod) -> io::Result<Self> {
@@ -435,14 +505,19 @@ pub trait IntermediateTreeHeaderReadWrite: IntermediateTreeHeader + Copy + Sized
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
 }
 
-pub trait IntermediateTreeEntryReadWrite: Copy + Sized {
+pub trait IntermediateTreeEntryReadWrite: IntermediateTreeEntry + Copy + Sized {
     const ENTRY_SIZE: u16;
 
     fn read(f: &mut dyn Read) -> io::Result<Self>;
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
 }
 
-pub trait IntermediateTreeBlockReadWrite: IntermediateTreeBlock + Sized {
+pub trait IntermediateTreeBlockReadWrite: IntermediateTreeBlock + Sized
+where
+    <Self as IntermediateTreeBlock>::Header: IntermediateTreeHeaderReadWrite,
+    <Self as IntermediateTreeBlock>::Entry: IntermediateTreeEntryReadWrite,
+    <Self as IntermediateTreeBlock>::Trailer: BlockTrailerReadWrite,
+{
     fn new(
         header: Self::Header,
         entries: Vec<Self::Entry>,

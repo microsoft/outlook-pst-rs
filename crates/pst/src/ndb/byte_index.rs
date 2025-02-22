@@ -14,6 +14,12 @@ pub trait ByteIndex {
 #[derive(Clone, Copy, Default, Debug)]
 pub struct UnicodeByteIndex(u64);
 
+impl UnicodeByteIndex {
+    pub fn new(index: u64) -> Self {
+        Self(index)
+    }
+}
+
 impl ByteIndex for UnicodeByteIndex {
     type Index = u64;
 
@@ -24,7 +30,7 @@ impl ByteIndex for UnicodeByteIndex {
 
 impl ByteIndexReadWrite for UnicodeByteIndex {
     fn new(index: u64) -> Self {
-        Self(index)
+        Self::new(index)
     }
 
     fn read(f: &mut dyn Read) -> io::Result<Self> {
@@ -37,8 +43,26 @@ impl ByteIndexReadWrite for UnicodeByteIndex {
     }
 }
 
+impl From<u64> for UnicodeByteIndex {
+    fn from(value: u64) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<UnicodeByteIndex> for u64 {
+    fn from(value: UnicodeByteIndex) -> Self {
+        value.index()
+    }
+}
+
 #[derive(Clone, Copy, Default, Debug)]
 pub struct AnsiByteIndex(u32);
+
+impl AnsiByteIndex {
+    pub fn new(index: u32) -> Self {
+        Self(index)
+    }
+}
 
 impl ByteIndex for AnsiByteIndex {
     type Index = u32;
@@ -50,7 +74,7 @@ impl ByteIndex for AnsiByteIndex {
 
 impl ByteIndexReadWrite for AnsiByteIndex {
     fn new(index: u32) -> Self {
-        Self(index)
+        Self::new(index)
     }
 
     fn read(f: &mut dyn Read) -> io::Result<Self> {
@@ -60,5 +84,17 @@ impl ByteIndexReadWrite for AnsiByteIndex {
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         f.write_u32::<LittleEndian>(self.0)
+    }
+}
+
+impl From<u32> for AnsiByteIndex {
+    fn from(value: u32) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<AnsiByteIndex> for u32 {
+    fn from(value: AnsiByteIndex) -> Self {
+        value.index()
     }
 }

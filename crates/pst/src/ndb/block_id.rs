@@ -3,9 +3,9 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, Read, Write};
 
-use super::{*, read_write::*};
+use super::{read_write::*, *};
 
-pub trait BlockId {
+pub trait BlockId: Copy + Sized {
     type Index: Copy + Sized;
 
     fn is_internal(&self) -> bool;
@@ -16,6 +16,19 @@ pub const MAX_UNICODE_BLOCK_INDEX: u64 = 1_u64.rotate_right(2) - 1;
 
 #[derive(Clone, Copy, Default, Debug)]
 pub struct UnicodeBlockId(u64);
+
+impl UnicodeBlockId {
+    pub fn new(is_internal: bool, index: u64) -> NdbResult<Self> {
+        let is_internal = if is_internal { 0x2 } else { 0x0 };
+
+        let shifted_index = index.rotate_left(2);
+        if shifted_index & 0x3 != 0 {
+            return Err(NdbError::InvalidUnicodeBlockIndex(index));
+        };
+
+        Ok(Self(shifted_index | is_internal))
+    }
+}
 
 impl BlockId for UnicodeBlockId {
     type Index = u64;
@@ -30,17 +43,6 @@ impl BlockId for UnicodeBlockId {
 }
 
 impl BlockIdReadWrite for UnicodeBlockId {
-    fn new(is_internal: bool, index: u64) -> NdbResult<Self> {
-        let is_internal = if is_internal { 0x2 } else { 0x0 };
-
-        let shifted_index = index.rotate_left(2);
-        if shifted_index & 0x3 != 0 {
-            return Err(NdbError::InvalidUnicodeBlockIndex(index));
-        };
-
-        Ok(Self(shifted_index | is_internal))
-    }
-
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let value = f.read_u64::<LittleEndian>()?;
         Ok(Self(value))
@@ -68,6 +70,19 @@ pub const MAX_ANSI_BLOCK_INDEX: u32 = 1_u32.rotate_right(2) - 1;
 #[derive(Clone, Copy, Default, Debug)]
 pub struct AnsiBlockId(u32);
 
+impl AnsiBlockId {
+    pub fn new(is_internal: bool, index: u32) -> NdbResult<Self> {
+        let is_internal = if is_internal { 0x2 } else { 0x0 };
+
+        let shifted_index = index.rotate_left(2);
+        if shifted_index & 0x3 != 0 {
+            return Err(NdbError::InvalidAnsiBlockIndex(index));
+        };
+
+        Ok(Self(shifted_index | is_internal))
+    }
+}
+
 impl BlockId for AnsiBlockId {
     type Index = u32;
 
@@ -81,17 +96,6 @@ impl BlockId for AnsiBlockId {
 }
 
 impl BlockIdReadWrite for AnsiBlockId {
-    fn new(is_internal: bool, index: u32) -> NdbResult<Self> {
-        let is_internal = if is_internal { 0x2 } else { 0x0 };
-
-        let shifted_index = index.rotate_left(2);
-        if shifted_index & 0x3 != 0 {
-            return Err(NdbError::InvalidAnsiBlockIndex(index));
-        };
-
-        Ok(Self(shifted_index | is_internal))
-    }
-
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let value = f.read_u32::<LittleEndian>()?;
         Ok(Self(value))
