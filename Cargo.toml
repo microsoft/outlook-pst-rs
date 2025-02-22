@@ -14,5 +14,7 @@ keywords = [ "win32", "outlook", "mapi" ]
 categories = [ "os::windows-apis" ]
 
 [workspace.dependencies]
+anyhow = "1"
 byteorder = "1"
+clap = { version = "4", features = ["derive"] }
 thiserror = "2"
