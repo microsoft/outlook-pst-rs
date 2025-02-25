@@ -18,8 +18,10 @@ pub enum LtpError {
     InvalidHeapIndex(u16),
     #[error("Invalid HID hidType: {0:?}")]
     InvalidNodeType(crate::ndb::node_id::NodeIdType),
-    #[error("Invalid HNHDR bClientSig: 0x{0:02X}")]
+    #[error("Invalid HNHDR bSig: 0x{0:02X}")]
     InvalidHeapNodeSignature(u8),
+    #[error("Invalid HNHDR bClientSig: 0x{0:02X}")]
+    InvalidHeapNodeTypeSignature(u8),
     #[error("Invalid HNHDR rgbFillLevel: 0x{0:02X}")]
     InvalidHeapFillLevel(u8),
     #[error("HNPAGEMAP is out of space")]
@@ -34,6 +36,10 @@ pub enum LtpError {
     InvalidHeapPageFreeCount(u16),
     #[error("Invalid BTHHEADER bType: {0:?}")]
     InvalidHeapTreeNodeType(crate::ltp::heap::HeapNodeType),
+    #[error("Invalid BTHHEADER cbKey: 0x{0:02X}")]
+    InvalidHeapTreeKeySize(u8),
+    #[error("Invalid BTHHEADER cbEnt: 0x{0:02X}")]
+    InvalidHeapTreeDataSize(u8),
 }
 
 impl From<LtpError> for io::Error {

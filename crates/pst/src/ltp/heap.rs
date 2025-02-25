@@ -110,7 +110,7 @@ impl TryFrom<u8> for HeapNodeType {
             0xB5 => Ok(Self::Tree),
             0xBC => Ok(Self::Properties),
             0xCC => Ok(Self::Reserved6),
-            _ => Err(LtpError::InvalidHeapNodeSignature(value)),
+            _ => Err(LtpError::InvalidHeapNodeTypeSignature(value)),
         }
     }
 }
@@ -247,6 +247,13 @@ impl HeapNodeHeader {
 impl HeapNodeReadWrite for HeapNodeHeader {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let page_map_offset = f.read_u16::<LittleEndian>()?;
+        let heap_signature = f.read_u8()?;
+        if heap_signature != 0xEC {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                LtpError::InvalidHeapNodeSignature(heap_signature),
+            ));
+        }
         let client_signature = HeapNodeType::try_from(f.read_u8()?)?;
         let user_root = HeapId::read(f)?;
         let fill_levels = HeapFillLevel::unpack_fill_levels(f.read_u32::<LittleEndian>()?);
@@ -261,6 +268,7 @@ impl HeapNodeReadWrite for HeapNodeHeader {
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         f.write_u16::<LittleEndian>(self.page_map_offset)?;
+        f.write_u8(0xEC)?;
         f.write_u8(self.client_signature as u8)?;
         self.user_root.write(f)?;
         let fill_levels = HeapFillLevel::pack_fill_levels(&self.fill_levels);

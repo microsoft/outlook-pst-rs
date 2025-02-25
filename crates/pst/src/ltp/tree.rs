@@ -15,13 +15,27 @@ pub struct HeapTreeHeader {
 }
 
 impl HeapTreeHeader {
-    pub fn new(key_size: u8, entry_size: u8, levels: u8, root: HeapId) -> Self {
-        Self {
+    pub fn new(key_size: u8, entry_size: u8, levels: u8, root: HeapId) -> LtpResult<Self> {
+        match key_size {
+            2 | 4 | 8 | 16 => {}
+            invalid => {
+                return Err(LtpError::InvalidHeapTreeKeySize(invalid));
+            }
+        }
+
+        match entry_size {
+            1..=32 => {}
+            invalid => {
+                return Err(LtpError::InvalidHeapTreeDataSize(invalid));
+            }
+        }
+
+        Ok(Self {
             key_size,
             entry_size,
             levels,
             root,
-        }
+        })
     }
 
     pub fn key_size(&self) -> u8 {
@@ -56,7 +70,7 @@ impl HeapNodeReadWrite for HeapTreeHeader {
         let levels = f.read_u8()?;
         let root = HeapId::read(f)?;
 
-        Ok(Self::new(key_size, entry_size, levels, root))
+        Ok(Self::new(key_size, entry_size, levels, root)?)
     }
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
