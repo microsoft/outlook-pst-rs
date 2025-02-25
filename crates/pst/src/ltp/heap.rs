@@ -6,6 +6,8 @@ use std::io::{self, Read, Write};
 use super::{read_write::*, *};
 use crate::ndb::{node_id::*, read_write::NodeIdReadWrite};
 
+pub const HEAP_INDEX_MASK: u32 = (1_u16.rotate_right(5) - 1) as u32;
+
 /// [HID](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/85b9e985-ea53-447f-b70c-eb82bfbdcbc9)
 #[derive(Clone, Copy, Default, Debug)]
 pub struct HeapId(NodeId);
@@ -23,7 +25,7 @@ impl HeapId {
     }
 
     pub fn index(&self) -> u16 {
-        (self.0.index() & 0x7FF) as u16
+        (self.0.index() & HEAP_INDEX_MASK) as u16
     }
 
     pub fn block_index(&self) -> u16 {
@@ -43,7 +45,7 @@ impl HeapIdReadWrite for HeapId {
         if id_type != NodeIdType::HeapNode {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                LtpError::InvalidHeapNodeType(id_type),
+                LtpError::InvalidNodeType(id_type),
             ));
         }
 
@@ -73,7 +75,7 @@ impl From<HeapId> for u32 {
 /// [HeapNodeHeader]
 #[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum HeapClientSignature {
+pub enum HeapNodeType {
     /// `bTypeReserved1`: Reserved
     Reserved1 = 0x6C,
     /// `bTypeTC`: Table Context (TC/HN)
@@ -94,7 +96,7 @@ pub enum HeapClientSignature {
     Reserved6 = 0xCC,
 }
 
-impl TryFrom<u8> for HeapClientSignature {
+impl TryFrom<u8> for HeapNodeType {
     type Error = LtpError;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
@@ -108,7 +110,7 @@ impl TryFrom<u8> for HeapClientSignature {
             0xB5 => Ok(Self::Tree),
             0xBC => Ok(Self::Properties),
             0xCC => Ok(Self::Reserved6),
-            _ => Err(LtpError::InvalidHeapClientSignature(value)),
+            _ => Err(LtpError::InvalidHeapNodeSignature(value)),
         }
     }
 }
@@ -205,7 +207,7 @@ impl HeapFillLevel {
 #[derive(Clone, Copy, Debug)]
 pub struct HeapNodeHeader {
     page_map_offset: u16,
-    client_signature: HeapClientSignature,
+    client_signature: HeapNodeType,
     user_root: HeapId,
     fill_levels: [HeapFillLevel; 8],
 }
@@ -213,7 +215,7 @@ pub struct HeapNodeHeader {
 impl HeapNodeHeader {
     pub fn new(
         page_map_offset: u16,
-        client_signature: HeapClientSignature,
+        client_signature: HeapNodeType,
         user_root: HeapId,
         fill_levels: [HeapFillLevel; 8],
     ) -> Self {
@@ -229,7 +231,7 @@ impl HeapNodeHeader {
         self.page_map_offset
     }
 
-    pub fn client_signature(&self) -> HeapClientSignature {
+    pub fn client_signature(&self) -> HeapNodeType {
         self.client_signature
     }
 
@@ -245,7 +247,7 @@ impl HeapNodeHeader {
 impl HeapNodeReadWrite for HeapNodeHeader {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let page_map_offset = f.read_u16::<LittleEndian>()?;
-        let client_signature = HeapClientSignature::try_from(f.read_u8()?)?;
+        let client_signature = HeapNodeType::try_from(f.read_u8()?)?;
         let user_root = HeapId::read(f)?;
         let fill_levels = HeapFillLevel::unpack_fill_levels(f.read_u32::<LittleEndian>()?);
 
