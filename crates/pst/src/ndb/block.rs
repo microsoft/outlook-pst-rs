@@ -1,9 +1,9 @@
 //! [Blocks](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/a9c1981d-d1ea-457c-b39e-dc7fb0eb95d4)
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{self, Read, Write};
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
-use super::{block_id::*, node_id::*, read_write::*, *};
+use super::{block_id::*, block_ref::*, byte_index::*, node_id::*, page::*, read_write::*, *};
 
 pub const MAX_BLOCK_SIZE: u16 = 8192;
 
@@ -758,10 +758,7 @@ impl IntermediateTreeEntryReadWrite for UnicodeIntermediateSubNodeTreeEntry {
     const ENTRY_SIZE: u16 = 16;
 
     fn read(f: &mut dyn Read) -> io::Result<Self> {
-        let node = f.read_u64::<LittleEndian>()?;
-        let Ok(node) = u32::try_from(node).map(NodeId::from) else {
-            return Err(NdbError::InvalidIntermediateBlockEntryNodeId(node).into());
-        };
+        let node = NodeId::from(f.read_u64::<LittleEndian>()? as u32);
         let block = UnicodeBlockId::read(f)?;
         Ok(Self::new(node, block))
     }
@@ -878,7 +875,72 @@ pub enum UnicodeSubNodeTree {
     Leaf(Box<UnicodeLeafSubNodeTreeBlock>),
 }
 
+impl UnicodeSubNodeTree {
+    pub fn read<R: Read + Seek>(f: &mut R, block: &UnicodeBlockBTreeEntry) -> io::Result<Self> {
+        f.seek(SeekFrom::Start(block.block().index().index()))?;
+
+        let block_size = block_size(block.size() + UnicodeBlockTrailer::SIZE);
+        let mut data = vec![0; block_size as usize];
+        f.read_exact(&mut data)?;
+        let mut cursor = Cursor::new(data);
+        let header = UnicodeSubNodeTreeBlockHeader::read(&mut cursor)?;
+        cursor.seek(SeekFrom::Start(0))?;
+
+        if header.level() > 0 {
+            let block =
+                UnicodeIntermediateSubNodeTreeBlock::read(&mut cursor, header, block.size())?;
+            Ok(UnicodeSubNodeTree::Intermediate(Box::new(block)))
+        } else {
+            let block = UnicodeLeafSubNodeTreeBlock::read(&mut cursor, header, block.size())?;
+            Ok(UnicodeSubNodeTree::Leaf(Box::new(block)))
+        }
+    }
+
+    pub fn write<W: Write + Seek>(
+        &self,
+        f: &mut W,
+        block: &UnicodeBlockBTreeEntry,
+    ) -> io::Result<()> {
+        f.seek(SeekFrom::Start(block.block().index().index()))?;
+
+        match self {
+            UnicodeSubNodeTree::Intermediate(block) => block.write(f),
+            UnicodeSubNodeTree::Leaf(block) => block.write(f),
+        }
+    }
+}
+
 pub enum AnsiSubNodeTree {
     Intermediate(Box<AnsiIntermediateSubNodeTreeBlock>),
     Leaf(Box<AnsiLeafSubNodeTreeBlock>),
+}
+
+impl AnsiSubNodeTree {
+    pub fn read<R: Read + Seek>(f: &mut R, block: &AnsiBlockBTreeEntry) -> io::Result<Self> {
+        f.seek(SeekFrom::Start(u64::from(block.block().index().index())))?;
+
+        let block_size = block_size(block.size() + AnsiBlockTrailer::SIZE);
+        let mut data = vec![0; block_size as usize];
+        f.read_exact(&mut data)?;
+        let mut cursor = Cursor::new(data);
+        let header = AnsiSubNodeTreeBlockHeader::read(&mut cursor)?;
+        cursor.seek(SeekFrom::Start(0))?;
+
+        if header.level() > 0 {
+            let block = AnsiIntermediateSubNodeTreeBlock::read(&mut cursor, header, block.size())?;
+            Ok(AnsiSubNodeTree::Intermediate(Box::new(block)))
+        } else {
+            let block = AnsiLeafSubNodeTreeBlock::read(&mut cursor, header, block.size())?;
+            Ok(AnsiSubNodeTree::Leaf(Box::new(block)))
+        }
+    }
+
+    pub fn write<W: Write + Seek>(&self, f: &mut W, block: &AnsiBlockBTreeEntry) -> io::Result<()> {
+        f.seek(SeekFrom::Start(u64::from(block.block().index().index())))?;
+
+        match self {
+            AnsiSubNodeTree::Intermediate(block) => block.write(f),
+            AnsiSubNodeTree::Leaf(block) => block.write(f),
+        }
+    }
 }

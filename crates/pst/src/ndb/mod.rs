@@ -50,8 +50,6 @@ pub enum NdbError {
     InvalidNdbHeaderPlatformCreate(u8),
     #[error("Invalid HEADER bPlatformAccess: 0x{0:02X}")]
     InvalidNdbHeaderPlatformAccess(u8),
-    #[error("Invalid HEADER qwUnused: 0x{0:016X}")]
-    InvalidNdbHeaderUnusedValue(u64),
     #[error("Invalid HEADER dwAlign: 0x{0:08X}")]
     InvalidNdbHeaderAlignValue(u32),
     #[error("Invalid HEADER bSentinel: 0x{0:02X}")]
@@ -114,10 +112,6 @@ pub enum NdbError {
     InvalidInternalBlockLevel(u8),
     #[error("Invalid internal block cEnt: 0x{0:04X}")]
     InvalidInternalBlockEntryCount(u16),
-    #[error("Invalid SLENTRY nid: 0x{0:016X}")]
-    InvalidLeafBlockEntryNodeId(u64),
-    #[error("Invalid SIENTRY nid: 0x{0:016X}")]
-    InvalidIntermediateBlockEntryNodeId(u64),
     #[error("Invalid sub-node tree block dwPadding: 0x{0:08X}")]
     InvalidSubNodeBlockPadding(u32),
 }

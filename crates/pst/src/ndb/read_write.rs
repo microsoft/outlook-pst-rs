@@ -547,12 +547,11 @@ where
         trailer: Self::Trailer,
     ) -> NdbResult<Self>;
 
-    fn read<R: Read + Seek>(f: &mut R, size: u16) -> io::Result<Self> {
+    fn read<R: Read + Seek>(f: &mut R, header: Self::Header, size: u16) -> io::Result<Self> {
         let mut data = vec![0; size as usize];
         f.read_exact(&mut data)?;
-        let mut cursor = Cursor::new(data.as_slice());
+        let mut cursor = Cursor::new(&data[Self::Header::HEADER_SIZE as usize..]);
 
-        let header = Self::Header::read(&mut cursor)?;
         let entry_count = header.entry_count();
 
         if entry_count * Self::Entry::ENTRY_SIZE > size - Self::Header::HEADER_SIZE {
@@ -564,7 +563,8 @@ where
             .collect::<io::Result<Vec<_>>>()?;
 
         let offset = Self::Header::HEADER_SIZE + entry_count * Self::Entry::ENTRY_SIZE;
-        let offset = i64::from(block_size(size + Self::Trailer::SIZE) - offset);
+        let offset =
+            i64::from(block_size(size + Self::Trailer::SIZE) - Self::Trailer::SIZE - offset);
         match offset.cmp(&0) {
             Ordering::Greater => {
                 f.seek(SeekFrom::Current(offset))?;

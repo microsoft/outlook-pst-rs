@@ -124,7 +124,8 @@ pub struct UnicodeHeader {
 
     reserved1: u32,
     reserved2: u32,
-    unused: u64,
+    unused1: u64,
+    unused2: u64,
     reserved3: [u8; 36],
 }
 
@@ -139,7 +140,8 @@ impl UnicodeHeader {
             next_block: Default::default(),
             reserved1: 0,
             reserved2: 0,
-            unused: 0,
+            unused1: 0,
+            unused2: 0,
             reserved3: [0; 36],
         }
     }
@@ -229,7 +231,7 @@ impl HeaderReadWrite for UnicodeHeader {
         let reserved2 = cursor.read_u32::<LittleEndian>()?;
 
         // bidUnused
-        let unused = cursor.read_u64::<LittleEndian>()?;
+        let unused1 = cursor.read_u64::<LittleEndian>()?;
 
         // bidNextP
         let next_page = UnicodeBlockId::read(&mut cursor)?;
@@ -244,12 +246,7 @@ impl HeaderReadWrite for UnicodeHeader {
         }
 
         // qwUnused
-        {
-            let unused = cursor.read_u64::<LittleEndian>()?;
-            if unused != 0 {
-                return Err(NdbError::InvalidNdbHeaderUnusedValue(unused).into());
-            }
-        }
+        let unused2 = cursor.read_u64::<LittleEndian>()?;
 
         // root
         let root = UnicodeRoot::read(&mut cursor)?;
@@ -297,7 +294,8 @@ impl HeaderReadWrite for UnicodeHeader {
             next_block,
             reserved1,
             reserved2,
-            unused,
+            unused1,
+            unused2,
             reserved3,
         })
     }
@@ -319,7 +317,7 @@ impl HeaderReadWrite for UnicodeHeader {
         // dwReserved2
         cursor.write_u32::<LittleEndian>(self.reserved2)?;
         // bidUnused
-        cursor.write_u64::<LittleEndian>(self.unused)?;
+        cursor.write_u64::<LittleEndian>(self.unused1)?;
         // bidNextP
         self.next_page.write(&mut cursor)?;
         // dwUnique
@@ -329,7 +327,7 @@ impl HeaderReadWrite for UnicodeHeader {
             cursor.write_u32::<LittleEndian>(*nid)?;
         }
         // qwUnused
-        cursor.write_u64::<LittleEndian>(0)?;
+        cursor.write_u64::<LittleEndian>(self.unused2)?;
         // root
         self.root.write(&mut cursor)?;
         // dwAlign
