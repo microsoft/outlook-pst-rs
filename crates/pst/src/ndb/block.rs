@@ -535,6 +535,16 @@ where
 pub type UnicodeDataTreeBlock = DataTreeBlock<UnicodeDataTreeEntry, UnicodeBlockTrailer>;
 pub type AnsiDataTreeBlock = DataTreeBlock<AnsiDataTreeEntry, AnsiBlockTrailer>;
 
+pub enum UnicodeDataTree {
+    Intermediate(Box<UnicodeDataTreeBlock>),
+    Leaf(Box<UnicodeDataBlock>),
+}
+
+pub enum AnsiDataTree {
+    Intermediate(Box<AnsiDataTreeBlock>),
+    Leaf(Box<AnsiDataBlock>),
+}
+
 #[derive(Clone, Copy, Default)]
 struct SubNodeTreeBlockHeader {
     level: u8,
@@ -862,3 +872,13 @@ pub type UnicodeLeafSubNodeTreeBlock = SubNodeTreeBlock<
 >;
 pub type AnsiLeafSubNodeTreeBlock =
     SubNodeTreeBlock<AnsiSubNodeTreeBlockHeader, AnsiLeafSubNodeTreeEntry, AnsiBlockTrailer>;
+
+pub enum UnicodeSubNodeTree {
+    Intermediate(Box<UnicodeIntermediateSubNodeTreeBlock>),
+    Leaf(Box<UnicodeLeafSubNodeTreeBlock>),
+}
+
+pub enum AnsiSubNodeTree {
+    Intermediate(Box<AnsiIntermediateSubNodeTreeBlock>),
+    Leaf(Box<AnsiLeafSubNodeTreeBlock>),
+}

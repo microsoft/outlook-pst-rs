@@ -4,8 +4,8 @@ use outlook_pst::{
         block_ref::UnicodeBlockRef,
         header::Header,
         page::{
-            BTreePage, BTreePageEntry, BlockBTreeEntry, NodeBTreeEntry, UnicodeBlockBTree,
-            UnicodeNodeBTree,
+            BTreeEntry, BTreePage, BTreePageEntry, BlockBTreeEntry, NodeBTreeEntry,
+            UnicodeBlockBTree, UnicodeNodeBTree,
         },
         root::Root,
     },

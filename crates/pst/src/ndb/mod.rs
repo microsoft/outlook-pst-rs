@@ -90,6 +90,10 @@ pub enum NdbError {
     InvalidBTreeEntrySize(u8),
     #[error("Invalid BTPAGE dwPadding: 0x{0:08X}")]
     InvalidBTreePagePadding(u32),
+    #[error("BTENTRY not found: 0x{0:016X}")]
+    UnicodeBTreePageNotFound(u64),
+    #[error("BTENTRY not found: 0x{0:08X}")]
+    AnsiBTreePageNotFound(u32),
     #[error("Invalid NBTENTRY nid: 0x{0:016X}")]
     InvalidNodeBTreeEntryNodeId(u64),
     #[error("Invalid BLOCKTRAILER cb: 0x{0:04X}")]

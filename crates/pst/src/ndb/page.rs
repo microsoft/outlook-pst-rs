@@ -732,7 +732,11 @@ impl DensityListPageReadWrite for AnsiDensityListPage {
     }
 }
 
-pub trait BTreeEntry {}
+pub trait BTreeEntry {
+    type Key: Copy + Sized;
+
+    fn key(&self) -> Self::Key;
+}
 
 /// [BTPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/4f0cd8e7-c2d0-4975-90a4-d417cfca77f8)
 pub trait BTreePage {
@@ -894,25 +898,22 @@ impl AnsiBTreePageReadWrite<AnsiBTreePageEntry> for AnsiBTreeEntryPage {}
 
 /// [BTENTRY](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/bc8052a3-f300-4022-be31-f0f408fffca0)
 pub trait BTreePageEntry: BTreeEntry {
-    type Key: BlockId;
     type Block: BlockRef;
 
-    fn key(&self) -> Self::Key;
     fn block(&self) -> Self::Block;
 }
 
 impl<Entry> BTreeEntryReadWrite for Entry
 where
-    Entry: BTreePageEntry<
-            Key: BlockIdReadWrite,
-            Block: BlockRefReadWrite<Block: BlockIdReadWrite, Index: ByteIndexReadWrite>,
-        > + BTreePageEntryReadWrite,
+    Entry: BTreeEntry<Key: BTreePageKeyReadWrite>
+        + BTreePageEntry<Block: BlockRefReadWrite<Block: BlockIdReadWrite, Index: ByteIndexReadWrite>>
+        + BTreePageEntryReadWrite,
 {
     const ENTRY_SIZE: usize = <Entry as BTreePageEntryReadWrite>::ENTRY_SIZE;
 
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         Ok(Self::new(
-            <Self as BTreePageEntry>::Key::read(f)?,
+            <Self as BTreeEntry>::Key::read(f)?,
             <Self as BTreePageEntry>::Block::read(f)?,
         ))
     }
@@ -923,21 +924,32 @@ where
     }
 }
 
+impl BTreePageKeyReadWrite for u64 {
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        f.read_u64::<LittleEndian>()
+    }
+
+    fn write(self, f: &mut dyn Write) -> io::Result<()> {
+        f.write_u64::<LittleEndian>(self)
+    }
+}
+
 #[derive(Copy, Clone, Default, Debug)]
 pub struct UnicodeBTreePageEntry {
-    key: UnicodeBlockId,
+    key: u64,
     block: UnicodeBlockRef,
 }
 
-impl BTreeEntry for UnicodeBTreePageEntry {}
+impl BTreeEntry for UnicodeBTreePageEntry {
+    type Key = u64;
 
-impl BTreePageEntry for UnicodeBTreePageEntry {
-    type Key = UnicodeBlockId;
-    type Block = UnicodeBlockRef;
-
-    fn key(&self) -> UnicodeBlockId {
+    fn key(&self) -> u64 {
         self.key
     }
+}
+
+impl BTreePageEntry for UnicodeBTreePageEntry {
+    type Block = UnicodeBlockRef;
 
     fn block(&self) -> UnicodeBlockRef {
         self.block
@@ -947,30 +959,37 @@ impl BTreePageEntry for UnicodeBTreePageEntry {
 impl BTreePageEntryReadWrite for UnicodeBTreePageEntry {
     const ENTRY_SIZE: usize = 24;
 
-    fn new(key: UnicodeBlockId, block: UnicodeBlockRef) -> Self {
+    fn new(key: u64, block: UnicodeBlockRef) -> Self {
         Self { key, block }
     }
+}
 
-    fn extend_key(node: NodeId) -> Self::Key {
-        UnicodeBlockId::from(u64::from(u32::from(node)))
+impl BTreePageKeyReadWrite for u32 {
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        f.read_u32::<LittleEndian>()
+    }
+
+    fn write(self, f: &mut dyn Write) -> io::Result<()> {
+        f.write_u32::<LittleEndian>(self)
     }
 }
 
 #[derive(Copy, Clone, Default, Debug)]
 pub struct AnsiBTreePageEntry {
-    key: AnsiBlockId,
+    key: u32,
     block: AnsiBlockRef,
 }
 
-impl BTreeEntry for AnsiBTreePageEntry {}
+impl BTreeEntry for AnsiBTreePageEntry {
+    type Key = u32;
 
-impl BTreePageEntry for AnsiBTreePageEntry {
-    type Key = AnsiBlockId;
-    type Block = AnsiBlockRef;
-
-    fn key(&self) -> AnsiBlockId {
+    fn key(&self) -> u32 {
         self.key
     }
+}
+
+impl BTreePageEntry for AnsiBTreePageEntry {
+    type Block = AnsiBlockRef;
 
     fn block(&self) -> AnsiBlockRef {
         self.block
@@ -980,12 +999,8 @@ impl BTreePageEntry for AnsiBTreePageEntry {
 impl BTreePageEntryReadWrite for AnsiBTreePageEntry {
     const ENTRY_SIZE: usize = 12;
 
-    fn new(key: AnsiBlockId, block: AnsiBlockRef) -> Self {
+    fn new(key: u32, block: AnsiBlockRef) -> Self {
         Self { key, block }
-    }
-
-    fn extend_key(node: NodeId) -> Self::Key {
-        AnsiBlockId::from(u32::from(node))
     }
 }
 
@@ -1017,7 +1032,13 @@ impl UnicodeBlockBTreeEntry {
     }
 }
 
-impl BTreeEntry for UnicodeBlockBTreeEntry {}
+impl BTreeEntry for UnicodeBlockBTreeEntry {
+    type Key = u64;
+
+    fn key(&self) -> u64 {
+        u64::from(self.block.block())
+    }
+}
 
 impl BTreeEntryReadWrite for UnicodeBlockBTreeEntry {
     const ENTRY_SIZE: usize = 24;
@@ -1160,7 +1181,13 @@ impl AnsiBlockBTreeEntry {
     }
 }
 
-impl BTreeEntry for AnsiBlockBTreeEntry {}
+impl BTreeEntry for AnsiBlockBTreeEntry {
+    type Key = u32;
+
+    fn key(&self) -> u32 {
+        u32::from(self.block.block())
+    }
+}
 
 impl BTreeEntryReadWrite for AnsiBlockBTreeEntry {
     const ENTRY_SIZE: usize = 12;
@@ -1315,7 +1342,13 @@ impl UnicodeNodeBTreeEntry {
     }
 }
 
-impl BTreeEntry for UnicodeNodeBTreeEntry {}
+impl BTreeEntry for UnicodeNodeBTreeEntry {
+    type Key = u64;
+
+    fn key(&self) -> u64 {
+        u64::from(u32::from(self.node))
+    }
+}
 
 impl BTreeEntryReadWrite for UnicodeNodeBTreeEntry {
     const ENTRY_SIZE: usize = 32;
@@ -1509,7 +1542,13 @@ impl AnsiNodeBTreeEntry {
     }
 }
 
-impl BTreeEntry for AnsiNodeBTreeEntry {}
+impl BTreeEntry for AnsiNodeBTreeEntry {
+    type Key = u32;
+
+    fn key(&self) -> u32 {
+        u32::from(self.node)
+    }
+}
 
 impl BTreeEntryReadWrite for AnsiNodeBTreeEntry {
     const ENTRY_SIZE: usize = 16;
@@ -1680,7 +1719,7 @@ where
 impl<LeafPage, Entry> UnicodeBTree<LeafPage, Entry>
 where
     LeafPage: UnicodeBTreePageReadWrite<Entry>,
-    Entry: BTreeEntryReadWrite,
+    Entry: BTreeEntryReadWrite + BTreeEntry<Key: PartialEq<u64>>,
 {
     pub fn read<R: Read + Seek>(f: &mut R, block: UnicodeBlockRef) -> io::Result<Self> {
         f.seek(SeekFrom::Start(block.index().index()))?;
@@ -1708,6 +1747,30 @@ where
             UnicodeBTree::Leaf(page, _) => page.write(f),
         }
     }
+
+    pub fn find_entry<R: Read + Seek>(&self, f: &mut R, key: u64) -> io::Result<Entry> {
+        match self {
+            UnicodeBTree::Intermediate(page) => {
+                let page = page
+                    .entries()
+                    .iter()
+                    .take_while(|entry| entry.key() <= key)
+                    .last()
+                    .map(|entry| entry.block())
+                    .ok_or(NdbError::UnicodeBTreePageNotFound(key))?;
+                let page = Self::read(f, page)?;
+                page.find_entry(f, key)
+            }
+            UnicodeBTree::Leaf(page, _) => {
+                let entry = page
+                    .entries()
+                    .iter()
+                    .find(|entry| entry.key() == key)
+                    .ok_or(NdbError::UnicodeBTreePageNotFound(key))?;
+                Ok(*entry)
+            }
+        }
+    }
 }
 
 pub type UnicodeBlockBTree = UnicodeBTree<UnicodeBlockBTreePage, UnicodeBlockBTreeEntry>;
@@ -1725,7 +1788,7 @@ where
 impl<LeafPage, Entry> AnsiBTree<LeafPage, Entry>
 where
     LeafPage: AnsiBTreePageReadWrite<Entry>,
-    Entry: BTreeEntryReadWrite,
+    Entry: BTreeEntryReadWrite + BTreeEntry<Key: PartialEq<u32>>,
 {
     pub fn read<R: Read + Seek>(f: &mut R, block: AnsiBlockRef) -> io::Result<Self> {
         f.seek(SeekFrom::Start(u64::from(block.index().index())))?;
@@ -1751,6 +1814,30 @@ where
         match self {
             AnsiBTree::Intermediate(page) => page.write(f),
             AnsiBTree::Leaf(page, _) => page.write(f),
+        }
+    }
+
+    pub fn find_entry<R: Read + Seek>(&self, f: &mut R, key: u32) -> io::Result<Entry> {
+        match self {
+            AnsiBTree::Intermediate(page) => {
+                let page = page
+                    .entries()
+                    .iter()
+                    .take_while(|entry| entry.key() <= key)
+                    .last()
+                    .map(|entry| entry.block())
+                    .ok_or(NdbError::AnsiBTreePageNotFound(key))?;
+                let page = Self::read(f, page)?;
+                page.find_entry(f, key)
+            }
+            AnsiBTree::Leaf(page, _) => {
+                let entry = page
+                    .entries()
+                    .iter()
+                    .find(|entry| entry.key() == key)
+                    .ok_or(NdbError::AnsiBTreePageNotFound(key))?;
+                Ok(*entry)
+            }
         }
     }
 }

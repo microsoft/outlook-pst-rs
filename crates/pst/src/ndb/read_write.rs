@@ -146,6 +146,11 @@ pub trait DensityListPageReadWrite: DensityListPage + Sized {
     fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()>;
 }
 
+pub trait BTreePageKeyReadWrite: Copy + Sized {
+    fn read(f: &mut dyn Read) -> io::Result<Self>;
+    fn write(self, f: &mut dyn Write) -> io::Result<()>;
+}
+
 pub trait BTreeEntryReadWrite: BTreeEntry + Copy + Sized + Default {
     const ENTRY_SIZE: usize;
 
@@ -160,14 +165,13 @@ pub trait BlockBTreeEntryReadWrite: BlockBTreeEntry + Copy + Sized {
 pub trait BTreePageEntryReadWrite: BTreePageEntry
 where
     Self: BTreeEntryReadWrite,
-    <Self as BTreePageEntry>::Key: BlockIdReadWrite,
+    <Self as BTreeEntry>::Key: BTreePageKeyReadWrite,
     <Self as BTreePageEntry>::Block:
         BlockRef<Block: BlockIdReadWrite, Index: ByteIndexReadWrite> + BlockRefReadWrite,
 {
     const ENTRY_SIZE: usize;
 
     fn new(key: Self::Key, block: Self::Block) -> Self;
-    fn extend_key(node: NodeId) -> Self::Key;
 
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         Ok(Self::new(Self::Key::read(f)?, Self::Block::read(f)?))
