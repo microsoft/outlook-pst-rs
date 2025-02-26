@@ -110,6 +110,7 @@ pub trait Header {
     type Root: Root;
 
     fn version(&self) -> NdbVersion;
+    fn crypt_method(&self) -> NdbCryptMethod;
     fn root(&self) -> &Self::Root;
     fn root_mut(&mut self) -> &mut Self::Root;
 }
@@ -152,6 +153,10 @@ impl Header for UnicodeHeader {
 
     fn version(&self) -> NdbVersion {
         NdbVersion::Unicode
+    }
+
+    fn crypt_method(&self) -> NdbCryptMethod {
+        self.crypt_method
     }
 
     fn root(&self) -> &UnicodeRoot {
@@ -398,6 +403,10 @@ impl Header for AnsiHeader {
 
     fn version(&self) -> NdbVersion {
         NdbVersion::Ansi
+    }
+
+    fn crypt_method(&self) -> NdbCryptMethod {
+        self.crypt_method
     }
 
     fn root(&self) -> &AnsiRoot {

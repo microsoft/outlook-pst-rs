@@ -1,7 +1,10 @@
 //! [NID (Node ID)](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/18d7644e-cb33-4e11-95c0-34d8a84fbff6)
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{self, Read, Write};
+use std::{
+    fmt::Debug,
+    io::{self, Read, Write},
+};
 
 use super::{read_write::NodeIdReadWrite, *};
 
@@ -86,7 +89,7 @@ impl TryFrom<u8> for NodeIdType {
 
 pub const MAX_NODE_INDEX: u32 = 1_u32.rotate_right(5) - 1;
 
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default)]
 pub struct NodeId(u32);
 
 impl NodeId {
@@ -104,7 +107,7 @@ impl NodeId {
         Ok(Self(shifted_index | (u32::from(id_type))))
     }
 
-    pub fn id_type(&self) -> Result<NodeIdType, NdbError> {
+    pub fn id_type(&self) -> NdbResult<NodeIdType> {
         let nid_type = self.0 & 0x1F;
         NodeIdType::try_from(nid_type as u8)
     }
@@ -126,6 +129,16 @@ impl NodeIdReadWrite for NodeId {
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         f.write_u32::<LittleEndian>(self.0)
+    }
+}
+
+impl Debug for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Ok(id_type) = self.id_type() else {
+            return write!(f, "NodeId {{ invalid: 0x{:08X} }}", u32::from(*self));
+        };
+
+        write!(f, "NodeId {{ {:?}: 0x{:X} }}", id_type, self.index())
     }
 }
 

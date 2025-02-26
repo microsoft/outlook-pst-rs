@@ -457,7 +457,8 @@ where
         let mut data = vec![0; size as usize];
         f.read_exact(&mut data)?;
 
-        let offset = i64::from(block_size(size) - size - Self::Trailer::SIZE);
+        let offset = size + Self::Trailer::SIZE;
+        let offset = i64::from(block_size(offset) - offset);
         if offset > 0 {
             f.seek(SeekFrom::Current(offset))?;
         }
@@ -512,7 +513,8 @@ where
         f.write_all(&data)?;
 
         let size = data.len() as u16;
-        let offset = i64::from(block_size(size) - size - UnicodeBlockTrailer::SIZE);
+        let offset = size + Self::Trailer::SIZE;
+        let offset = i64::from(block_size(offset) - offset);
         if offset > 0 {
             f.seek(SeekFrom::Current(offset))?;
         }
@@ -562,9 +564,9 @@ where
             .map(move |_| <Self::Entry as IntermediateTreeEntryReadWrite>::read(&mut cursor))
             .collect::<io::Result<Vec<_>>>()?;
 
-        let offset = Self::Header::HEADER_SIZE + entry_count * Self::Entry::ENTRY_SIZE;
-        let offset =
-            i64::from(block_size(size + Self::Trailer::SIZE) - Self::Trailer::SIZE - offset);
+        let size = Self::Header::HEADER_SIZE + entry_count * Self::Entry::ENTRY_SIZE;
+        let offset = size + Self::Trailer::SIZE;
+        let offset = i64::from(block_size(offset) - offset);
         match offset.cmp(&0) {
             Ordering::Greater => {
                 f.seek(SeekFrom::Current(offset))?;

@@ -540,9 +540,81 @@ pub enum UnicodeDataTree {
     Leaf(Box<UnicodeDataBlock>),
 }
 
+impl UnicodeDataTree {
+    pub fn read<R: Read + Seek>(
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block: &UnicodeBlockBTreeEntry,
+    ) -> io::Result<Self> {
+        f.seek(SeekFrom::Start(block.block().index().index()))?;
+
+        let block_size = block_size(block.size() + UnicodeBlockTrailer::SIZE);
+        let mut data = vec![0; block_size as usize];
+        f.read_exact(&mut data)?;
+        let mut cursor = Cursor::new(data);
+
+        if block.block().block().is_internal() {
+            let header = DataTreeBlockHeader::read(&mut cursor)?;
+            cursor.seek(SeekFrom::Start(0))?;
+            let block = UnicodeDataTreeBlock::read(&mut cursor, header, block.size())?;
+            Ok(UnicodeDataTree::Intermediate(Box::new(block)))
+        } else {
+            let block = UnicodeDataBlock::read(&mut cursor, block.size(), encoding)?;
+            Ok(UnicodeDataTree::Leaf(Box::new(block)))
+        }
+    }
+
+    pub fn write<W: Write + Seek>(
+        &self,
+        f: &mut W,
+        block: &UnicodeBlockBTreeEntry,
+    ) -> io::Result<()> {
+        f.seek(SeekFrom::Start(block.block().index().index()))?;
+
+        match self {
+            UnicodeDataTree::Intermediate(block) => block.write(f),
+            UnicodeDataTree::Leaf(block) => block.write(f),
+        }
+    }
+}
+
 pub enum AnsiDataTree {
     Intermediate(Box<AnsiDataTreeBlock>),
     Leaf(Box<AnsiDataBlock>),
+}
+
+impl AnsiDataTree {
+    pub fn read<R: Read + Seek>(
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block: &AnsiBlockBTreeEntry,
+    ) -> io::Result<Self> {
+        f.seek(SeekFrom::Start(u64::from(block.block().index().index())))?;
+
+        let block_size = block_size(block.size() + AnsiBlockTrailer::SIZE);
+        let mut data = vec![0; block_size as usize];
+        f.read_exact(&mut data)?;
+        let mut cursor = Cursor::new(data);
+
+        if block.block().block().is_internal() {
+            let header = DataTreeBlockHeader::read(&mut cursor)?;
+            cursor.seek(SeekFrom::Start(0))?;
+            let block = AnsiDataTreeBlock::read(&mut cursor, header, block.size())?;
+            Ok(AnsiDataTree::Intermediate(Box::new(block)))
+        } else {
+            let block = AnsiDataBlock::read(&mut cursor, block.size(), encoding)?;
+            Ok(AnsiDataTree::Leaf(Box::new(block)))
+        }
+    }
+
+    pub fn write<W: Write + Seek>(&self, f: &mut W, block: &AnsiBlockBTreeEntry) -> io::Result<()> {
+        f.seek(SeekFrom::Start(u64::from(block.block().index().index())))?;
+
+        match self {
+            AnsiDataTree::Intermediate(block) => block.write(f),
+            AnsiDataTree::Leaf(block) => block.write(f),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default)]

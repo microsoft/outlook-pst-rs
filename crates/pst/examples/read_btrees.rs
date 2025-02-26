@@ -1,10 +1,14 @@
 use clap::Parser;
 use outlook_pst::{
     ndb::{
-        block::{IntermediateTreeBlock, IntermediateTreeHeader, UnicodeSubNodeTree},
+        block::{
+            Block, BlockTrailer, IntermediateTreeBlock, IntermediateTreeHeader, UnicodeDataTree,
+            UnicodeSubNodeTree,
+        },
         block_id::UnicodeBlockId,
         block_ref::UnicodeBlockRef,
-        header::Header,
+        header::{Header, NdbCryptMethod},
+        node_id::NodeId,
         page::{
             BTreeEntry, BTreePage, BTreePageEntry, BlockBTreeEntry, NodeBTreeEntry,
             UnicodeBlockBTree, UnicodeNodeBTree,
@@ -30,14 +34,80 @@ fn main() -> anyhow::Result<()> {
         println!();
 
         let block_btree = UnicodeBlockBTree::read(&mut *file, *root.block_btree())?;
-        output_node_btree(&mut *file, None, &block_btree, *root.node_btree())?;
+        output_node_btree(
+            &mut *file,
+            header.crypt_method(),
+            None,
+            &block_btree,
+            *root.node_btree(),
+        )?;
     }
 
     Ok(())
 }
 
+fn output_data_tree(
+    file: &mut File,
+    encoding: NdbCryptMethod,
+    indent: &str,
+    max_level: Option<u8>,
+    block_btree: &UnicodeBlockBTree,
+    node_data_tree: UnicodeBlockId,
+) -> io::Result<()> {
+    let data_block = block_btree.find_entry(file, u64::from(node_data_tree))?;
+    let data_tree = UnicodeDataTree::read(&mut *file, encoding, &data_block)?;
+    match data_tree {
+        UnicodeDataTree::Intermediate(block) => {
+            let level = block.header().level();
+            let entries = block.entries();
+
+            let sub_block_indent = max_level
+                .map(|max_level| {
+                    iter::repeat_n(' ', usize::from(max_level - level)).collect::<String>()
+                })
+                .unwrap_or_default();
+            let max_level = max_level.or(Some(level));
+
+            println!(
+                "{indent}{sub_block_indent}Data Tree Level: {level}: Entries: {}",
+                entries.len()
+            );
+
+            println!(
+                "{indent}{sub_block_indent}Total Size: 0x{:X}",
+                block.header().total_size()
+            );
+
+            for entry in entries {
+                println!("{indent}{sub_block_indent} Block: {:?}", entry.block());
+                output_data_tree(
+                    file,
+                    encoding,
+                    &indent,
+                    max_level,
+                    block_btree,
+                    entry.block(),
+                )?;
+            }
+        }
+        UnicodeDataTree::Leaf(block) => {
+            let sub_block_indent = max_level
+                .map(|max_level| iter::repeat_n(' ', usize::from(max_level)).collect::<String>())
+                .unwrap_or_default();
+
+            println!(
+                "{indent}{sub_block_indent}Data Block: {:?}",
+                block.trailer().block_id()
+            );
+            println!("{indent}{sub_block_indent}Size: 0x{:X}", block.data().len());
+        }
+    }
+    Ok(())
+}
+
 fn output_sub_node_tree(
     file: &mut File,
+    encoding: NdbCryptMethod,
     indent: &str,
     max_level: Option<u8>,
     block_btree: &UnicodeBlockBTree,
@@ -65,7 +135,14 @@ fn output_sub_node_tree(
             for entry in entries {
                 println!("{sub_node_indent} Node: {:?}", entry.node());
                 println!("{sub_node_indent} Block: {:?}", entry.block());
-                output_sub_node_tree(file, indent, max_level, block_btree, entry.block())?;
+                output_sub_node_tree(
+                    file,
+                    encoding,
+                    indent,
+                    max_level,
+                    block_btree,
+                    entry.block(),
+                )?;
             }
         }
         UnicodeSubNodeTree::Leaf(block) => {
@@ -84,7 +161,16 @@ fn output_sub_node_tree(
             for entry in entries {
                 println!("{indent}{sub_node_indent} Node: {:?}", entry.node());
 
-                println!("{indent}{sub_node_indent} Block: {:?}", entry.block());
+                let data_tree_indent = format!("{indent}{sub_node_indent} ");
+                output_data_tree(
+                    file,
+                    encoding,
+                    &data_tree_indent,
+                    None,
+                    block_btree,
+                    entry.block(),
+                )?;
+
                 let sub_node_block = block_btree.find_entry(file, u64::from(entry.block()))?;
                 println!(
                     "{indent}{sub_node_indent}  BlockRef: {:?}",
@@ -94,7 +180,7 @@ fn output_sub_node_tree(
                 if let Some(sub_node) = entry.sub_node() {
                     let indent = format!("{indent}{sub_node_indent}  ");
                     println!("{indent}Sub-Node Block: {:?}", sub_node);
-                    output_sub_node_tree(file, &indent, None, block_btree, sub_node)?;
+                    output_sub_node_tree(file, encoding, &indent, None, block_btree, sub_node)?;
                 } else {
                     println!("{indent}{sub_node_indent}  Sub-Node Block: None");
                 }
@@ -106,6 +192,7 @@ fn output_sub_node_tree(
 
 fn output_node_btree(
     file: &mut File,
+    encoding: NdbCryptMethod,
     max_level: Option<u8>,
     block_btree: &UnicodeBlockBTree,
     node_btree: UnicodeBlockRef,
@@ -129,8 +216,12 @@ fn output_node_btree(
             );
 
             for entry in entries {
-                println!("{indent} Key: {:?}", entry.key());
-                output_node_btree(file, max_level, block_btree, entry.block())?;
+                let Ok(key) = u32::try_from(entry.key()).map(NodeId::from) else {
+                    println!("{indent} Invalid Key: 0x{:X}", entry.key());
+                    continue;
+                };
+                println!("{indent} Key: {key:?}");
+                output_node_btree(file, encoding, max_level, block_btree, entry.block())?;
             }
         }
         UnicodeNodeBTree::Leaf(page, _) => {
@@ -145,16 +236,22 @@ fn output_node_btree(
 
             for entry in entries {
                 println!("{indent} Node: {:?}", entry.node());
-                println!("{indent}  Data Block: {:?}", entry.data());
-                if let Some(sub_node) = entry.sub_node() {
-                    println!("{indent}  Sub-Node Block: {:?}", sub_node);
-                    let indent = format!("{indent}   ");
-                    output_sub_node_tree(file, &indent, None, block_btree, sub_node)?;
+                let indent = format!("{indent}  ");
+                if u64::from(entry.data()) == 0 {
+                    println!("{indent}Data Block: {:?}", entry.data());
                 } else {
-                    println!("{indent}  Sub-Node Block: None");
+                    output_data_tree(file, encoding, &indent, None, block_btree, entry.data())?;
                 }
 
-                println!("{indent}  Parent Node: {:?}", entry.parent());
+                if let Some(sub_node) = entry.sub_node() {
+                    println!("{indent}Sub-Node Block: {:?}", sub_node);
+                    let indent = format!("{indent} ");
+                    output_sub_node_tree(file, encoding, &indent, None, block_btree, sub_node)?;
+                } else {
+                    println!("{indent}Sub-Node Block: None");
+                }
+
+                println!("{indent}Parent Node: {:?}", entry.parent());
             }
         }
     }

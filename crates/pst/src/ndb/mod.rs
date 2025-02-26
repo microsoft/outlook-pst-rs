@@ -70,11 +70,11 @@ pub enum NdbError {
     InvalidPageCrc(u32),
     #[error("Invalid ANSI map page dwPadding: 0x{0:08X}")]
     InvalidAnsiMapPagePadding(u32),
-    #[error("Invalid DLISTPAGEENT dwPageNum: 0x{0:08X}")]
+    #[error("Invalid DLISTPAGEENT dwPageNum: 0x{0:X}")]
     InvalidDensityListEntryPageNumber(u32),
     #[error("Invalid DLISTPAGEENT dwFreeSlots: 0x{0:04X}")]
     InvalidDensityListEntryFreeSlots(u16),
-    #[error("Invalid DLISTPAGE cbEntDList: 0x{0:016X}")]
+    #[error("Invalid DLISTPAGE cbEntDList: 0x{0:X}")]
     InvalidDensityListEntryCount(usize),
     #[error("Invalid DLISTPAGE rgPadding")]
     InvalidDensityListPadding,
@@ -88,19 +88,19 @@ pub enum NdbError {
     InvalidBTreeEntrySize(u8),
     #[error("Invalid BTPAGE dwPadding: 0x{0:08X}")]
     InvalidBTreePagePadding(u32),
-    #[error("BTENTRY not found: 0x{0:016X}")]
+    #[error("BTENTRY not found: 0x{0:6X}")]
     UnicodeBTreePageNotFound(u64),
-    #[error("BTENTRY not found: 0x{0:08X}")]
+    #[error("BTENTRY not found: 0x{0:X}")]
     AnsiBTreePageNotFound(u32),
-    #[error("Invalid NBTENTRY nid: 0x{0:016X}")]
+    #[error("Invalid NBTENTRY nid: 0x{0:X}")]
     InvalidNodeBTreeEntryNodeId(u64),
-    #[error("Invalid BLOCKTRAILER cb: 0x{0:04X}")]
+    #[error("Invalid BLOCKTRAILER cb: 0x{0:X}")]
     InvalidBlockSize(u16),
     #[error("Invalid BLOCKTRAILER dwCRC: 0x{0:08X}")]
     InvalidBlockCrc(u32),
-    #[error("Invalid BLOCKTRAILER bid: 0x{0:016X}")]
+    #[error("Invalid BLOCKTRAILER bid: 0x{0:X}")]
     InvalidUnicodeBlockTrailerId(u64),
-    #[error("Invalid BLOCKTRAILER bid: 0x{0:08X}")]
+    #[error("Invalid BLOCKTRAILER bid: 0x{0:X}")]
     InvalidAnsiBlockTrailerId(u32),
     #[error("Invalid internal block encoding: {0:?}")]
     InvalidInternalBlockEncoding(NdbCryptMethod),
@@ -110,7 +110,7 @@ pub enum NdbError {
     InvalidInternalBlockType(u8),
     #[error("Invalid internal block cLevel: 0x{0:02X}")]
     InvalidInternalBlockLevel(u8),
-    #[error("Invalid internal block cEnt: 0x{0:04X}")]
+    #[error("Invalid internal block cEnt: 0x{0:X}")]
     InvalidInternalBlockEntryCount(u16),
     #[error("Invalid sub-node tree block dwPadding: 0x{0:08X}")]
     InvalidSubNodeBlockPadding(u32),
