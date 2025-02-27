@@ -48,6 +48,20 @@ pub struct PropertyTreeRecord {
     value: PropertyValueRecord,
 }
 
+impl PropertyTreeRecord {
+    pub fn prop_id(&self) -> u16 {
+        self.prop_id
+    }
+
+    pub fn prop_type(&self) -> PropertyType {
+        self.prop_type
+    }
+
+    pub fn value(&self) -> PropertyValueRecord {
+        self.value
+    }
+}
+
 impl PropertyTreeRecordReadWrite for PropertyTreeRecord {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         // wPropId
@@ -97,10 +111,28 @@ impl PropertyTreeRecordReadWrite for PropertyTreeRecord {
 
 #[derive(Clone, Copy, Default)]
 pub struct GuidValue {
-    pub data1: u32,
-    pub data2: u16,
-    pub data3: u16,
-    pub data4: [u8; 8],
+    data1: u32,
+    data2: u16,
+    data3: u16,
+    data4: [u8; 8],
+}
+
+impl GuidValue {
+    pub fn data1(&self) -> u32 {
+        self.data1
+    }
+
+    pub fn data2(&self) -> u16 {
+        self.data2
+    }
+
+    pub fn data3(&self) -> u16 {
+        self.data3
+    }
+
+    pub fn data4(&self) -> &[u8; 8] {
+        &self.data4
+    }
 }
 
 impl Debug for GuidValue {
@@ -127,6 +159,16 @@ impl Debug for GuidValue {
 pub struct ObjectValue {
     node_id: NodeId,
     size: u32,
+}
+
+impl ObjectValue {
+    pub fn node(&self) -> NodeId {
+        self.node_id
+    }
+
+    pub fn size(&self) -> u32 {
+        self.size
+    }
 }
 
 impl Debug for ObjectValue {
