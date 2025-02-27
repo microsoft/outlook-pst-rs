@@ -359,8 +359,8 @@ impl HeapNodePageAllocOffsets {
 
 #[derive(Clone, Copy, Default, Debug)]
 pub struct HeapNodePageAlloc {
-    offset: u16,
-    size: u16,
+    pub offset: u16,
+    pub size: u16,
 }
 
 /// [HNPAGEMAP](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/291653c0-b347-4c5b-ba41-85ad780b4ba4)
