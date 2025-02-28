@@ -16,6 +16,7 @@ pub mod root;
 pub(crate) mod read_write;
 
 use header::NdbCryptMethod;
+use node_id::NodeId;
 use page::PageType;
 
 #[derive(Error, Debug)]
@@ -114,6 +115,8 @@ pub enum NdbError {
     InvalidInternalBlockEntryCount(u16),
     #[error("Invalid sub-node tree block dwPadding: 0x{0:08X}")]
     InvalidSubNodeBlockPadding(u32),
+    #[error("Sub-node not found: {0:?}")]
+    SubNodeNotFound(NodeId),
 }
 
 impl From<NdbError> for io::Error {

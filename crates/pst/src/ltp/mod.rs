@@ -55,6 +55,8 @@ pub enum LtpError {
     InvalidMultiValuePropertyOffset(usize),
     #[error("Invalid multi-value property count: 0x{0:X}")]
     InvalidMultiValuePropertyCount(usize),
+    #[error("Missing PC sub-node value: 0x{0:08X}")]
+    PropertySubNodeValueNotFound(u32),
     #[error("Invalid small PC value property type: {0:?}")]
     InvalidSmallPropertyType(crate::ltp::prop_type::PropertyType),
 }

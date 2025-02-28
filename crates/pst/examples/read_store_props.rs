@@ -45,7 +45,7 @@ fn main() -> anyhow::Result<()> {
         assert_eq!(tree_header.key_size(), 2);
         assert_eq!(tree_header.entry_size(), 6);
 
-        let prop_context = UnicodePropertyContext::new(tree);
+        let prop_context = UnicodePropertyContext::new(node, tree);
         let properties = prop_context.properties(file, encoding, &block_btree)?;
 
         for (prop_id, record) in properties {
@@ -55,8 +55,7 @@ fn main() -> anyhow::Result<()> {
             );
             println!(" Record: {:?}", record);
 
-            let value =
-                prop_context.read_property(file, encoding, &block_btree, &node_btree, record)?;
+            let value = prop_context.read_property(file, encoding, &block_btree, record)?;
             println!(" Value: {:?}", value);
         }
     }

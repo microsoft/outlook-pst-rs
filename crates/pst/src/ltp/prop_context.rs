@@ -10,14 +10,14 @@ use std::{
 
 use super::{heap::*, prop_type::*, read_write::*, tree::*, *};
 use crate::ndb::{
-    block::{AnsiDataTree, Block, UnicodeDataTree},
+    block::{AnsiDataTree, AnsiSubNodeTree, Block, UnicodeDataTree, UnicodeSubNodeTree},
     header::NdbCryptMethod,
     node_id::{NodeId, NodeIdType},
     page::{
-        AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, RootBTree, UnicodeBlockBTree,
-        UnicodeNodeBTree,
+        AnsiBlockBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, RootBTree, UnicodeBlockBTree,
+        UnicodeNodeBTreeEntry,
     },
-    read_write::*,
+    read_write::NodeIdReadWrite,
 };
 
 #[derive(Copy, Clone)]
@@ -886,12 +886,13 @@ impl PropertyValueReadWrite for PropertyValue {
 }
 
 pub struct UnicodePropertyContext {
+    node: UnicodeNodeBTreeEntry,
     tree: UnicodeHeapTree,
 }
 
 impl UnicodePropertyContext {
-    pub fn new(tree: UnicodeHeapTree) -> Self {
-        Self { tree }
+    pub fn new(node: UnicodeNodeBTreeEntry, tree: UnicodeHeapTree) -> Self {
+        Self { node, tree }
     }
 
     pub fn tree(&self) -> &UnicodeHeapTree {
@@ -927,7 +928,6 @@ impl UnicodePropertyContext {
         f: &mut R,
         encoding: NdbCryptMethod,
         block_btree: &UnicodeBlockBTree,
-        node_btree: &UnicodeNodeBTree,
         value: PropertyTreeRecordValue,
     ) -> io::Result<PropertyValue> {
         match value.value() {
@@ -939,9 +939,17 @@ impl UnicodePropertyContext {
                 let mut cursor = Cursor::new(data);
                 PropertyValue::read(&mut cursor, value.prop_type())
             }
-            PropertyValueRecord::Node(node_id) => {
-                let node = node_btree.find_entry(f, u64::from(u32::from(node_id)))?;
-                let block = block_btree.find_entry(f, u64::from(node.data()))?;
+            PropertyValueRecord::Node(sub_node_id) => {
+                let sub_node =
+                    self.node
+                        .sub_node()
+                        .ok_or(LtpError::PropertySubNodeValueNotFound(u32::from(
+                            sub_node_id,
+                        )))?;
+                let block = block_btree.find_entry(f, u64::from(sub_node))?;
+                let sub_node_tree = UnicodeSubNodeTree::read(f, &block)?;
+                let block = sub_node_tree.find_entry(f, block_btree, sub_node_id)?;
+                let block = block_btree.find_entry(f, u64::from(block))?;
                 let data_tree = UnicodeDataTree::read(f, encoding, &block)?;
                 let blocks: Vec<_> = data_tree.blocks(f, encoding, block_btree)?.collect();
                 let data: Vec<_> = blocks
@@ -960,12 +968,13 @@ impl UnicodePropertyContext {
 }
 
 pub struct AnsiPropertyContext {
+    node: AnsiNodeBTreeEntry,
     tree: AnsiHeapTree,
 }
 
 impl AnsiPropertyContext {
-    pub fn new(tree: AnsiHeapTree) -> Self {
-        Self { tree }
+    pub fn new(node: AnsiNodeBTreeEntry, tree: AnsiHeapTree) -> Self {
+        Self { node, tree }
     }
 
     pub fn tree(&self) -> &AnsiHeapTree {
@@ -1001,7 +1010,6 @@ impl AnsiPropertyContext {
         f: &mut R,
         encoding: NdbCryptMethod,
         block_btree: &AnsiBlockBTree,
-        node_btree: &AnsiNodeBTree,
         value: PropertyTreeRecordValue,
     ) -> io::Result<PropertyValue> {
         match value.value() {
@@ -1013,9 +1021,17 @@ impl AnsiPropertyContext {
                 let mut cursor = Cursor::new(data);
                 PropertyValue::read(&mut cursor, value.prop_type())
             }
-            PropertyValueRecord::Node(node_id) => {
-                let node = node_btree.find_entry(f, u32::from(node_id))?;
-                let block = block_btree.find_entry(f, u32::from(node.data()))?;
+            PropertyValueRecord::Node(sub_node_id) => {
+                let sub_node =
+                    self.node
+                        .sub_node()
+                        .ok_or(LtpError::PropertySubNodeValueNotFound(u32::from(
+                            sub_node_id,
+                        )))?;
+                let block = block_btree.find_entry(f, u32::from(sub_node))?;
+                let sub_node_tree = AnsiSubNodeTree::read(f, &block)?;
+                let block = sub_node_tree.find_entry(f, block_btree, sub_node_id)?;
+                let block = block_btree.find_entry(f, u32::from(block))?;
                 let data_tree = AnsiDataTree::read(f, encoding, &block)?;
                 let blocks: Vec<_> = data_tree.blocks(f, encoding, block_btree)?.collect();
                 let data: Vec<_> = blocks

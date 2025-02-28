@@ -1067,6 +1067,36 @@ impl UnicodeSubNodeTree {
             UnicodeSubNodeTree::Leaf(block) => block.write(f),
         }
     }
+
+    pub fn find_entry<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        block_btree: &UnicodeBlockBTree,
+        node: NodeId,
+    ) -> io::Result<UnicodeBlockId> {
+        match self {
+            UnicodeSubNodeTree::Intermediate(block) => {
+                let entry = block
+                    .entries()
+                    .iter()
+                    .take_while(|entry| u32::from(entry.node()) <= u32::from(node))
+                    .last()
+                    .ok_or(NdbError::SubNodeNotFound(node))?;
+                let block = block_btree.find_entry(f, u64::from(entry.block()))?;
+                let page = Self::read(f, &block)?;
+                page.find_entry(f, block_btree, node)
+            }
+            UnicodeSubNodeTree::Leaf(block) => {
+                let entry = block
+                    .entries()
+                    .iter()
+                    .find(|entry| u32::from(entry.node()) == u32::from(node))
+                    .map(|entry| entry.block())
+                    .ok_or(NdbError::SubNodeNotFound(node))?;
+                Ok(entry)
+            }
+        }
+    }
 }
 
 pub enum AnsiSubNodeTree {
@@ -1100,6 +1130,36 @@ impl AnsiSubNodeTree {
         match self {
             AnsiSubNodeTree::Intermediate(block) => block.write(f),
             AnsiSubNodeTree::Leaf(block) => block.write(f),
+        }
+    }
+
+    pub fn find_entry<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        block_btree: &AnsiBlockBTree,
+        node: NodeId,
+    ) -> io::Result<AnsiBlockId> {
+        match self {
+            AnsiSubNodeTree::Intermediate(block) => {
+                let entry = block
+                    .entries()
+                    .iter()
+                    .take_while(|entry| u32::from(entry.node()) <= u32::from(node))
+                    .last()
+                    .ok_or(NdbError::SubNodeNotFound(node))?;
+                let block = block_btree.find_entry(f, u32::from(entry.block()))?;
+                let page = Self::read(f, &block)?;
+                page.find_entry(f, block_btree, node)
+            }
+            AnsiSubNodeTree::Leaf(block) => {
+                let entry = block
+                    .entries()
+                    .iter()
+                    .find(|entry| u32::from(entry.node()) == u32::from(node))
+                    .map(|entry| entry.block())
+                    .ok_or(NdbError::SubNodeNotFound(node))?;
+                Ok(entry)
+            }
         }
     }
 }
