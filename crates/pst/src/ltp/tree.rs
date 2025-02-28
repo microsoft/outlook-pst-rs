@@ -1,7 +1,13 @@
 //! ## [BTree-on-Heap (BTH)](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/2dd1a95a-c8b1-4ac5-87d1-10cb8de64053)
 
 use byteorder::{ReadBytesExt, WriteBytesExt};
-use std::io::{self, Read, Write};
+use core::mem;
+use std::io::{self, Cursor, Read, Seek, Write};
+
+use crate::ndb::{
+    header::NdbCryptMethod,
+    page::{AnsiBlockBTree, UnicodeBlockBTree},
+};
 
 use super::{heap::*, read_write::*, *};
 
@@ -55,6 +61,14 @@ impl HeapTreeHeader {
     }
 }
 
+pub trait HeapTreeEntryKey: Copy + Sized + PartialEq + PartialOrd {
+    const SIZE: u8;
+}
+
+pub trait HeapTreeEntryValue: Copy + Sized {
+    const SIZE: u8;
+}
+
 impl HeapNodeReadWrite for HeapTreeHeader {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let heap_type = HeapNodeType::try_from(f.read_u8()?)?;
@@ -86,7 +100,7 @@ impl HeapNodeReadWrite for HeapTreeHeader {
 #[derive(Clone, Copy, Debug)]
 pub struct HeapTreeIntermediateEntry<K>
 where
-    K: Copy + Sized,
+    K: HeapTreeEntryKey,
 {
     key: K,
     next_level: HeapId,
@@ -94,7 +108,7 @@ where
 
 impl<K> HeapTreeIntermediateEntry<K>
 where
-    K: Copy + Sized,
+    K: HeapTreeEntryKey,
 {
     pub fn new(key: K, next_level: HeapId) -> Self {
         Self { key, next_level }
@@ -111,7 +125,7 @@ where
 
 impl<K> HeapNodeReadWrite for HeapTreeIntermediateEntry<K>
 where
-    K: HeapNodeReadWrite + Copy,
+    K: HeapNodeReadWrite + HeapTreeEntryKey,
 {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let key = K::read(f)?;
@@ -130,7 +144,7 @@ where
 #[derive(Clone, Copy, Debug)]
 pub struct HeapTreeLeafEntry<K, V>
 where
-    K: Copy + Sized,
+    K: HeapTreeEntryKey,
     V: Copy + Sized,
 {
     key: K,
@@ -139,7 +153,7 @@ where
 
 impl<K, V> HeapTreeLeafEntry<K, V>
 where
-    K: Copy + Sized,
+    K: HeapTreeEntryKey,
     V: Copy + Sized,
 {
     pub fn new(key: K, data: V) -> Self {
@@ -157,7 +171,7 @@ where
 
 impl<K, V> HeapNodeReadWrite for HeapTreeLeafEntry<K, V>
 where
-    K: HeapNodeReadWrite + Copy,
+    K: HeapNodeReadWrite + HeapTreeEntryKey,
     V: HeapNodeReadWrite + Copy,
 {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
@@ -170,5 +184,157 @@ where
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         self.key.write(f)?;
         self.data.write(f)
+    }
+}
+
+pub struct UnicodeHeapTree {
+    heap: UnicodeHeapNode,
+    user_root: HeapId,
+}
+
+impl UnicodeHeapTree {
+    pub fn new(heap: UnicodeHeapNode, user_root: HeapId) -> Self {
+        Self { heap, user_root }
+    }
+
+    pub fn heap(&self) -> &UnicodeHeapNode {
+        &self.heap
+    }
+
+    pub fn header<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_tree: &UnicodeBlockBTree,
+    ) -> io::Result<HeapTreeHeader> {
+        let header = self
+            .heap
+            .find_entry(self.user_root, f, encoding, block_tree)?;
+
+        let mut cursor = Cursor::new(header.as_slice());
+        let header = HeapTreeHeader::read(&mut cursor)?;
+        Ok(header)
+    }
+
+    pub fn entries<
+        R: Read + Seek,
+        K: HeapTreeEntryKey + HeapNodeReadWrite,
+        V: HeapTreeEntryValue + HeapNodeReadWrite,
+    >(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_tree: &UnicodeBlockBTree,
+    ) -> io::Result<Vec<HeapTreeLeafEntry<K, V>>> {
+        let header = self.header(f, encoding, block_tree)?;
+        if header.key_size() != K::SIZE {
+            return Err(LtpError::InvalidHeapTreeKeySize(header.key_size()).into());
+        }
+        if header.entry_size() != V::SIZE {
+            return Err(LtpError::InvalidHeapTreeDataSize(header.entry_size()).into());
+        }
+
+        let mut level = header.levels();
+        let mut next_level = vec![header.root()];
+
+        while level > 0 {
+            for heap_id in mem::take(&mut next_level).into_iter() {
+                let mut cursor =
+                    Cursor::new(self.heap.find_entry(heap_id, f, encoding, block_tree)?);
+
+                while let Ok(row) = HeapTreeIntermediateEntry::<K>::read(&mut cursor) {
+                    next_level.push(row.next_level());
+                }
+            }
+
+            level -= 1;
+        }
+
+        let mut results = Vec::new();
+        for heap_id in mem::take(&mut next_level).into_iter() {
+            let mut cursor = Cursor::new(self.heap.find_entry(heap_id, f, encoding, block_tree)?);
+
+            while let Ok(row) = HeapTreeLeafEntry::<K, V>::read(&mut cursor) {
+                results.push(row);
+            }
+        }
+
+        Ok(results)
+    }
+}
+
+pub struct AnsiHeapTree {
+    heap: AnsiHeapNode,
+    user_root: HeapId,
+}
+
+impl AnsiHeapTree {
+    pub fn new(heap: AnsiHeapNode, user_root: HeapId) -> Self {
+        Self { heap, user_root }
+    }
+
+    pub fn heap(&self) -> &AnsiHeapNode {
+        &self.heap
+    }
+
+    pub fn header<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_tree: &AnsiBlockBTree,
+    ) -> io::Result<HeapTreeHeader> {
+        let header = self
+            .heap
+            .find_entry(self.user_root, f, encoding, block_tree)?;
+
+        let mut cursor = Cursor::new(header.as_slice());
+        let header = HeapTreeHeader::read(&mut cursor)?;
+        Ok(header)
+    }
+
+    pub fn entries<
+        R: Read + Seek,
+        K: HeapTreeEntryKey + HeapNodeReadWrite,
+        V: HeapTreeEntryValue + HeapNodeReadWrite,
+    >(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_tree: &AnsiBlockBTree,
+    ) -> io::Result<Vec<HeapTreeLeafEntry<K, V>>> {
+        let header = self.header(f, encoding, block_tree)?;
+        if header.key_size() != K::SIZE {
+            return Err(LtpError::InvalidHeapTreeKeySize(header.key_size()).into());
+        }
+        if header.entry_size() != V::SIZE {
+            return Err(LtpError::InvalidHeapTreeDataSize(header.entry_size()).into());
+        }
+
+        let mut level = header.levels();
+        let mut next_level = vec![header.root()];
+
+        while level > 0 {
+            for heap_id in mem::take(&mut next_level).into_iter() {
+                let mut cursor =
+                    Cursor::new(self.heap.find_entry(heap_id, f, encoding, block_tree)?);
+
+                while let Ok(row) = HeapTreeIntermediateEntry::<K>::read(&mut cursor) {
+                    next_level.push(row.next_level());
+                }
+            }
+
+            level -= 1;
+        }
+
+        let mut results = Vec::new();
+        for heap_id in mem::take(&mut next_level).into_iter() {
+            let mut cursor = Cursor::new(self.heap.find_entry(heap_id, f, encoding, block_tree)?);
+
+            while let Ok(row) = HeapTreeLeafEntry::<K, V>::read(&mut cursor) {
+                results.push(row);
+            }
+        }
+
+        Ok(results)
     }
 }

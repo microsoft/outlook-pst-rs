@@ -41,16 +41,22 @@ pub enum LtpError {
     InvalidHeapTreeKeySize(u8),
     #[error("Invalid BTHHEADER cbEnt: 0x{0:02X}")]
     InvalidHeapTreeDataSize(u8),
+    #[error("Missing HID hidBlockIndex: {0}")]
+    HeapBlockIndexNotFound(u16),
+    #[error("Invalid HID hidIndex: {0}")]
+    InvalidHeapAllocIndex(u16),
+    #[error("Missing HID hidIndex: {0}")]
+    HeapAllocIndexNotFound(u16),
     #[error("Invalid PC BTH Record wPropType: 0x{0:04X}")]
     InvalidPropertyType(u16),
     #[error("Invalid variable length PC value property type: {0:?}")]
     InvalidVariableLengthPropertyType(crate::ltp::prop_type::PropertyType),
-    #[error("String is not null terminated: length = 0x{0:X}")]
-    StringNotNullTerminated(usize),
     #[error("Invalid multi-value property offset: 0x{0:X}")]
     InvalidMultiValuePropertyOffset(usize),
     #[error("Invalid multi-value property count: 0x{0:X}")]
     InvalidMultiValuePropertyCount(usize),
+    #[error("Invalid small PC value property type: {0:?}")]
+    InvalidSmallPropertyType(crate::ltp::prop_type::PropertyType),
 }
 
 impl From<LtpError> for io::Error {

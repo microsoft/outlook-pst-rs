@@ -3,13 +3,17 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use core::mem;
 use std::{
+    collections::BTreeMap,
     fmt::Debug,
-    io::{self, Read, Write},
+    io::{self, Cursor, Read, Seek, Write},
 };
 
-use super::{heap::*, prop_type::*, read_write::*, *};
+use super::{heap::*, prop_type::*, read_write::*, tree::*, *};
 use crate::ndb::{
+    block::{Block, UnicodeDataTree},
+    header::NdbCryptMethod,
     node_id::{NodeId, NodeIdType},
+    page::{NodeBTreeEntry, RootBTree, UnicodeBlockBTree, UnicodeNodeBTree},
     read_write::*,
 };
 
@@ -18,6 +22,29 @@ pub enum PropertyValueRecord {
     Small(u32),
     Heap(HeapId),
     Node(NodeId),
+}
+
+impl PropertyValueRecord {
+    pub fn small_value(&self, prop_type: PropertyType) -> Option<PropertyValue> {
+        match (self, prop_type) {
+            (PropertyValueRecord::Small(value), PropertyType::Integer16) => {
+                Some(PropertyValue::Integer16((*value & 0xFFFF) as i16))
+            }
+            (PropertyValueRecord::Small(value), PropertyType::Integer32) => {
+                Some(PropertyValue::Integer32(*value as i32))
+            }
+            (PropertyValueRecord::Small(value), PropertyType::Floating32) => {
+                Some(PropertyValue::Floating32(f32::from_bits(*value)))
+            }
+            (PropertyValueRecord::Small(value), PropertyType::ErrorCode) => {
+                Some(PropertyValue::ErrorCode(*value as i32))
+            }
+            (PropertyValueRecord::Small(value), PropertyType::Boolean) => {
+                Some(PropertyValue::Boolean(*value & 0xFF != 0))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Debug for PropertyValueRecord {
@@ -40,17 +67,31 @@ impl From<PropertyValueRecord> for u32 {
     }
 }
 
-/// [PC BTH Record](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/7daab6f5-ce65-437e-80d5-1b1be4088bd3)
+pub type PropertyTreeRecordKey = u16;
+
+impl HeapTreeEntryKey for PropertyTreeRecordKey {
+    const SIZE: u8 = 2;
+}
+
+impl HeapNodeReadWrite for PropertyTreeRecordKey {
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        f.read_u16::<LittleEndian>()
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        f.write_u16::<LittleEndian>(*self)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
-pub struct PropertyTreeRecord {
-    prop_id: u16,
+pub struct PropertyTreeRecordValue {
     prop_type: PropertyType,
     value: PropertyValueRecord,
 }
 
-impl PropertyTreeRecord {
-    pub fn prop_id(&self) -> u16 {
-        self.prop_id
+impl PropertyTreeRecordValue {
+    pub fn new(prop_type: PropertyType, value: PropertyValueRecord) -> Self {
+        Self { prop_type, value }
     }
 
     pub fn prop_type(&self) -> PropertyType {
@@ -62,11 +103,12 @@ impl PropertyTreeRecord {
     }
 }
 
-impl PropertyTreeRecordReadWrite for PropertyTreeRecord {
-    fn read(f: &mut dyn Read) -> io::Result<Self> {
-        // wPropId
-        let prop_id = f.read_u16::<LittleEndian>()?;
+impl HeapTreeEntryValue for PropertyTreeRecordValue {
+    const SIZE: u8 = 6;
+}
 
+impl HeapNodeReadWrite for PropertyTreeRecordValue {
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
         // wPropType
         let prop_type = f.read_u16::<LittleEndian>()?;
         let prop_type = PropertyType::try_from(prop_type)?;
@@ -74,12 +116,15 @@ impl PropertyTreeRecordReadWrite for PropertyTreeRecord {
         // dwValueHnid
         let value = f.read_u32::<LittleEndian>()?;
         let value = match prop_type {
-            PropertyType::Null
-            | PropertyType::Integer16
-            | PropertyType::Integer32
-            | PropertyType::Floating32
-            | PropertyType::ErrorCode
-            | PropertyType::Boolean => PropertyValueRecord::Small(value),
+            PropertyType::Null => PropertyValueRecord::Small(0),
+
+            PropertyType::Integer16 => PropertyValueRecord::Small(value & 0xFFFF),
+
+            PropertyType::Integer32 | PropertyType::Floating32 | PropertyType::ErrorCode => {
+                PropertyValueRecord::Small(value)
+            }
+
+            PropertyType::Boolean => PropertyValueRecord::Small(value & 0xFF),
 
             PropertyType::Floating64
             | PropertyType::Currency
@@ -95,17 +140,98 @@ impl PropertyTreeRecordReadWrite for PropertyTreeRecord {
             },
         };
 
-        Ok(Self {
-            prop_id,
-            prop_type,
-            value,
-        })
+        Ok(Self { prop_type, value })
     }
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
-        f.write_u16::<LittleEndian>(self.prop_id)?;
         f.write_u16::<LittleEndian>(u16::from(self.prop_type))?;
         f.write_u32::<LittleEndian>(u32::from(self.value))
+    }
+}
+
+/// [PC BTH Record](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/7daab6f5-ce65-437e-80d5-1b1be4088bd3)
+#[derive(Clone, Copy)]
+pub struct PropertyTreeRecord {
+    key: PropertyTreeRecordKey,
+    data: PropertyTreeRecordValue,
+}
+
+impl PropertyTreeRecord {
+    pub fn new(prop_id: u16, prop_type: PropertyType, value: PropertyValueRecord) -> Self {
+        Self {
+            key: prop_id,
+            data: PropertyTreeRecordValue::new(prop_type, value),
+        }
+    }
+
+    pub fn prop_id(&self) -> u16 {
+        self.key
+    }
+
+    pub fn prop_type(&self) -> PropertyType {
+        self.data.prop_type()
+    }
+
+    pub fn value(&self) -> PropertyValueRecord {
+        self.data.value()
+    }
+}
+
+impl PropertyTreeRecordReadWrite for PropertyTreeRecord {
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let key = f.read_u16::<LittleEndian>()?;
+        let data = PropertyTreeRecordValue::read(f)?;
+
+        Ok(Self { key, data })
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        f.write_u16::<LittleEndian>(self.key)?;
+        self.data.write(f)
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct String8Value {
+    buffer: Vec<u8>,
+}
+
+impl String8Value {
+    pub fn new(buffer: Vec<u8>) -> LtpResult<Self> {
+        Ok(Self { buffer })
+    }
+
+    pub fn buffer(&self) -> &[u8] {
+        &self.buffer
+    }
+}
+
+impl Debug for String8Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = String::from_utf8_lossy(&self.buffer);
+        write!(f, "String8Value {{ {value:?} }}")
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct UnicodeValue {
+    buffer: Vec<u16>,
+}
+
+impl UnicodeValue {
+    pub fn new(buffer: Vec<u16>) -> LtpResult<Self> {
+        Ok(Self { buffer })
+    }
+
+    pub fn buffer(&self) -> &[u16] {
+        &self.buffer
+    }
+}
+
+impl Debug for UnicodeValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = String::from_utf16_lossy(&self.buffer);
+        write!(f, "UnicodeValue {{ {value:?} }}")
     }
 }
 
@@ -181,7 +307,7 @@ impl Debug for ObjectValue {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub enum PropertyValue {
     /// `PtypNull`: None: This property is a placeholder.
     #[default]
@@ -210,10 +336,10 @@ pub enum PropertyValue {
     Integer64(i64),
     /// `PtypString8`: Variable size; a string of multibyte characters in externally specified
     /// encoding with terminating null character (single 0 byte).
-    String8(Vec<u8>),
+    String8(String8Value),
     /// `PtypString`: Variable size; a string of Unicode characters in UTF-16LE format encoding
     /// with terminating null character (0x0000).
-    Unicode(Vec<u16>),
+    Unicode(UnicodeValue),
     /// `PtypTime`: 8 bytes; a 64-bit integer representing the number of 100-nanosecond intervals
     /// since January 1, 1601
     Time(i64),
@@ -248,10 +374,10 @@ pub enum PropertyValue {
     MultipleInteger64(Vec<i64>),
     /// `PtypMultipleString8`: Variable size; a COUNT field followed by that many
     /// [PropertyValue::String8] values.
-    MultipleString8(Vec<Vec<u8>>),
+    MultipleString8(Vec<String8Value>),
     /// `PtypMultipleString`: Variable size; a COUNT field followed by that many
     /// [PropertyValue::Unicode] values.
-    MultipleUnicode(Vec<Vec<u16>>),
+    MultipleUnicode(Vec<UnicodeValue>),
     /// `PtypMultipleTime`: Variable size; a COUNT field followed by that many
     /// [PropertyValue::Time] values.
     MultipleTime(Vec<i64>),
@@ -324,10 +450,7 @@ impl PropertyValueReadWrite for PropertyValue {
             PropertyType::String8 => {
                 let mut buffer = Vec::new();
                 f.read_to_end(&mut buffer)?;
-                match buffer.last() {
-                    Some(0) => Ok(Self::String8(buffer)),
-                    _ => Err(LtpError::StringNotNullTerminated(buffer.len()).into()),
-                }
+                Ok(Self::String8(String8Value::new(buffer)?))
             }
 
             PropertyType::Unicode => {
@@ -335,10 +458,7 @@ impl PropertyValueReadWrite for PropertyValue {
                 while let Ok(ch) = f.read_u16::<LittleEndian>() {
                     buffer.push(ch);
                 }
-                match buffer.last() {
-                    Some(0) => Ok(Self::Unicode(buffer)),
-                    _ => Err(LtpError::StringNotNullTerminated(buffer.len()).into()),
-                }
+                Ok(Self::Unicode(UnicodeValue::new(buffer)?))
             }
 
             PropertyType::Time => {
@@ -463,10 +583,7 @@ impl PropertyValueReadWrite for PropertyValue {
                         buffer
                     };
 
-                    values.push(match buffer.last() {
-                        Some(0) => io::Result::Ok(buffer),
-                        _ => Err(LtpError::StringNotNullTerminated(buffer.len()).into()),
-                    }?);
+                    values.push(String8Value::new(buffer)?);
                 }
 
                 Ok(Self::MultipleString8(values))
@@ -509,10 +626,7 @@ impl PropertyValueReadWrite for PropertyValue {
                         }
                     };
 
-                    values.push(match buffer.last() {
-                        Some(0) => io::Result::Ok(buffer),
-                        _ => Err(LtpError::StringNotNullTerminated(buffer.len()).into()),
-                    }?);
+                    values.push(UnicodeValue::new(buffer)?);
                 }
 
                 Ok(Self::MultipleUnicode(values))
@@ -601,10 +715,10 @@ impl PropertyValueReadWrite for PropertyValue {
 
             Self::Integer64(value) => f.write_i64::<LittleEndian>(*value),
 
-            Self::String8(buffer) => f.write_all(buffer),
+            Self::String8(value) => f.write_all(value.buffer()),
 
-            Self::Unicode(buffer) => {
-                for ch in buffer {
+            Self::Unicode(value) => {
+                for ch in value.buffer() {
                     f.write_u16::<LittleEndian>(*ch)?;
                 }
                 Ok(())
@@ -687,12 +801,12 @@ impl PropertyValueReadWrite for PropertyValue {
                     let offset = u32::try_from(start)
                         .map_err(|_| LtpError::InvalidMultiValuePropertyOffset(start))?;
                     f.write_u32::<LittleEndian>(offset)?;
-                    start += value.len();
+                    start += value.buffer().len();
                 }
 
                 // rgDataItems
                 for value in values {
-                    f.write_all(value)?;
+                    f.write_all(value.buffer())?;
                 }
 
                 Ok(())
@@ -710,12 +824,12 @@ impl PropertyValueReadWrite for PropertyValue {
                     let offset = u32::try_from(start)
                         .map_err(|_| LtpError::InvalidMultiValuePropertyOffset(start))?;
                     f.write_u32::<LittleEndian>(offset)?;
-                    start += value.len() * mem::size_of::<u16>();
+                    start += value.buffer().len() * mem::size_of::<u16>();
                 }
 
                 // rgDataItems
                 for value in values {
-                    for ch in value {
+                    for ch in value.buffer() {
                         f.write_u16::<LittleEndian>(*ch)?;
                     }
                 }
@@ -764,6 +878,80 @@ impl PropertyValueReadWrite for PropertyValue {
             }
 
             _ => Err(LtpError::InvalidVariableLengthPropertyType(self.into()).into()),
+        }
+    }
+}
+
+pub struct UnicodePropertyContext {
+    tree: UnicodeHeapTree,
+}
+
+impl UnicodePropertyContext {
+    pub fn new(tree: UnicodeHeapTree) -> Self {
+        Self { tree }
+    }
+
+    pub fn tree(&self) -> &UnicodeHeapTree {
+        &self.tree
+    }
+
+    pub fn properties<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_tree: &UnicodeBlockBTree,
+    ) -> io::Result<BTreeMap<PropertyTreeRecordKey, PropertyTreeRecordValue>> {
+        Ok(self
+            .tree
+            .entries(f, encoding, block_tree)?
+            .into_iter()
+            .map(
+                |entry: HeapTreeLeafEntry<PropertyTreeRecordKey, PropertyTreeRecordValue>| {
+                    (
+                        entry.key(),
+                        PropertyTreeRecordValue::new(
+                            entry.data().prop_type(),
+                            entry.data().value(),
+                        ),
+                    )
+                },
+            )
+            .collect())
+    }
+
+    pub fn read_property<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_tree: &UnicodeBlockBTree,
+        node_tree: &UnicodeNodeBTree,
+        value: PropertyTreeRecordValue,
+    ) -> io::Result<PropertyValue> {
+        match value.value() {
+            PropertyValueRecord::Heap(heap_id) => {
+                let data = self
+                    .tree
+                    .heap()
+                    .find_entry(heap_id, f, encoding, block_tree)?;
+                let mut cursor = Cursor::new(data);
+                PropertyValue::read(&mut cursor, value.prop_type())
+            }
+            PropertyValueRecord::Node(node_id) => {
+                let node = node_tree.find_entry(f, u64::from(u32::from(node_id)))?;
+                let block = block_tree.find_entry(f, u64::from(node.data()))?;
+                let data_tree = UnicodeDataTree::read(f, encoding, &block)?;
+                let blocks: Vec<_> = data_tree.blocks(f, encoding, &block_tree)?.collect();
+                let data: Vec<_> = blocks
+                    .iter()
+                    .flat_map(|block| block.data())
+                    .copied()
+                    .collect();
+                let mut cursor = Cursor::new(data);
+                PropertyValue::read(&mut cursor, value.prop_type())
+            }
+            small => small
+                .small_value(value.prop_type())
+                .ok_or(LtpError::InvalidSmallPropertyType(value.prop_type()).into()),
         }
     }
 }

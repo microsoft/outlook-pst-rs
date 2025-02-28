@@ -1,10 +1,16 @@
 //! ## [HN (Heap-on-Node)](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/77ce49a3-3772-4d8d-bb2c-2f7520a238a6)
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{self, Read, Write};
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
 use super::{read_write::*, *};
-use crate::ndb::{node_id::*, read_write::NodeIdReadWrite};
+use crate::ndb::{
+    block::*,
+    header::NdbCryptMethod,
+    node_id::*,
+    page::{AnsiBlockBTree, UnicodeBlockBTree},
+    read_write::*,
+};
 
 pub const HEAP_INDEX_MASK: u32 = (1_u16.rotate_right(5) - 1) as u32;
 
@@ -24,8 +30,12 @@ impl HeapId {
         Ok(Self(NodeId::new(NodeIdType::HeapNode, node_index)?))
     }
 
-    pub fn index(&self) -> u16 {
-        (self.0.index() & HEAP_INDEX_MASK) as u16
+    pub fn index(&self) -> LtpResult<u16> {
+        let index = (self.0.index() & HEAP_INDEX_MASK) as u16;
+        if index < 1 {
+            return Err(LtpError::InvalidHeapIndex(index));
+        }
+        Ok(index - 1)
     }
 
     pub fn block_index(&self) -> u16 {
@@ -285,7 +295,7 @@ impl HeapNodePageHeader {
         Self(page_index)
     }
 
-    pub fn page_index(&self) -> u16 {
+    pub fn page_map_offset(&self) -> u16 {
         self.0
     }
 }
@@ -424,7 +434,7 @@ impl TryFrom<HeapNodePageAllocOffsets> for HeapNodePageMap {
                     return None;
                 };
 
-                if next_offset <= last_offset {
+                if next_offset < last_offset {
                     return Some(Err(LtpError::InvalidHeapPageAllocOffset(next_offset)));
                 }
 
@@ -441,12 +451,7 @@ impl TryFrom<HeapNodePageAllocOffsets> for HeapNodePageMap {
 
                     free_count = value;
                 } else {
-                    let Ok(value) = u16::try_from(u32::from(last_offset) + u32::from(next_offset))
-                    else {
-                        return Some(Err(LtpError::HeapPageOutOfSpace));
-                    };
-
-                    offset = Some(value);
+                    offset = Some(next_offset);
                 }
 
                 Some(Ok(alloc))
@@ -491,5 +496,165 @@ impl HeapNodeReadWrite for HeapNodePageMap {
             last_offset = *offset + *size;
         }
         f.write_u16::<LittleEndian>(last_offset)
+    }
+}
+
+pub struct UnicodeHeapNode {
+    data: UnicodeDataTree,
+}
+
+impl UnicodeHeapNode {
+    pub fn new(data: UnicodeDataTree) -> Self {
+        Self { data }
+    }
+
+    pub fn data(&self) -> &UnicodeDataTree {
+        &self.data
+    }
+
+    pub fn header<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_tree: &UnicodeBlockBTree,
+    ) -> io::Result<HeapNodeHeader> {
+        let block = self
+            .data
+            .blocks(f, encoding, block_tree)?
+            .into_iter()
+            .next()
+            .ok_or(LtpError::HeapBlockIndexNotFound(0))?;
+
+        let mut cursor = Cursor::new(block.data());
+        let header = HeapNodeHeader::read(&mut cursor)?;
+        Ok(header)
+    }
+
+    pub fn find_entry<R: Read + Seek>(
+        &self,
+        heap_id: HeapId,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_tree: &UnicodeBlockBTree,
+    ) -> io::Result<Vec<u8>> {
+        let block_index = heap_id.block_index();
+        let block = self
+            .data
+            .blocks(f, encoding, block_tree)?
+            .into_iter()
+            .skip(block_index as usize)
+            .next()
+            .ok_or(LtpError::HeapBlockIndexNotFound(block_index))?;
+
+        let mut cursor = Cursor::new(block.data());
+
+        let page_map_offset = match block_index {
+            0 => {
+                let header = HeapNodeHeader::read(&mut cursor)?;
+                header.page_map_offset()
+            }
+            bitmap if (bitmap - 8) % 128 == 0 => {
+                let header = HeapNodeBitmapHeader::read(&mut cursor)?;
+                header.page_map_offset()
+            }
+            _ => {
+                let header = HeapNodePageHeader::read(&mut cursor)?;
+                header.page_map_offset()
+            }
+        };
+
+        cursor.seek(SeekFrom::Start(u64::from(page_map_offset)))?;
+        let page_map = HeapNodePageMap::read(&mut cursor)?;
+        let allocations = page_map.allocations();
+
+        let index = heap_id.index()?;
+        if index as usize >= allocations.len() {
+            return Err(LtpError::HeapAllocIndexNotFound(index).into());
+        }
+
+        let alloc = &allocations[index as usize];
+        let start = alloc.offset() as usize;
+        let end = start + alloc.size() as usize;
+        Ok(block.data()[start..end].to_vec())
+    }
+}
+
+pub struct AnsiHeapNode {
+    data: AnsiDataTree,
+}
+
+impl AnsiHeapNode {
+    pub fn new(data: AnsiDataTree) -> Self {
+        Self { data }
+    }
+
+    pub fn data(&self) -> &AnsiDataTree {
+        &self.data
+    }
+
+    pub fn header<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_tree: &AnsiBlockBTree,
+    ) -> io::Result<HeapNodeHeader> {
+        let block = self
+            .data
+            .blocks(f, encoding, block_tree)?
+            .into_iter()
+            .next()
+            .ok_or(LtpError::HeapBlockIndexNotFound(0))?;
+
+        let mut cursor = Cursor::new(block.data());
+        let header = HeapNodeHeader::read(&mut cursor)?;
+        Ok(header)
+    }
+
+    pub fn find_entry<R: Read + Seek>(
+        &self,
+        heap_id: HeapId,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_tree: &AnsiBlockBTree,
+    ) -> io::Result<Vec<u8>> {
+        let block_index = heap_id.block_index();
+        let block = self
+            .data
+            .blocks(f, encoding, block_tree)?
+            .into_iter()
+            .skip(block_index as usize)
+            .next()
+            .ok_or(LtpError::HeapBlockIndexNotFound(block_index))?;
+
+        let mut cursor = Cursor::new(block.data());
+
+        let page_map_offset = match block_index {
+            0 => {
+                let header = HeapNodeHeader::read(&mut cursor)?;
+                header.page_map_offset()
+            }
+            bitmap if (bitmap - 8) % 128 == 0 => {
+                let header = HeapNodeBitmapHeader::read(&mut cursor)?;
+                header.page_map_offset()
+            }
+            _ => {
+                let header = HeapNodePageHeader::read(&mut cursor)?;
+                header.page_map_offset()
+            }
+        };
+
+        cursor.seek(SeekFrom::Start(u64::from(page_map_offset)))?;
+        let page_map = HeapNodePageMap::read(&mut cursor)?;
+        let allocations = page_map.allocations();
+
+        let index = heap_id.index()?;
+        if index as usize >= allocations.len() {
+            return Err(LtpError::HeapAllocIndexNotFound(index).into());
+        }
+
+        let alloc = &allocations[index as usize];
+        let start = alloc.offset() as usize;
+        let end = start + alloc.size() as usize;
+        Ok(block.data()[start..end].to_vec())
     }
 }

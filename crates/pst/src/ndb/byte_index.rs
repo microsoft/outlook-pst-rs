@@ -9,7 +9,7 @@ use std::{
 use super::read_write::*;
 
 pub trait ByteIndex {
-    type Index: Copy + Sized;
+    type Index: Copy + Sized + Into<u64>;
 
     fn index(&self) -> Self::Index;
 }

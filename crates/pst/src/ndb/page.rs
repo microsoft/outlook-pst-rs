@@ -1707,6 +1707,28 @@ impl BTreePageReadWrite for AnsiNodeBTreePage {
 
 impl AnsiBTreePageReadWrite<AnsiNodeBTreeEntry> for AnsiNodeBTreePage {}
 
+pub trait RootBTree: Sized {
+    type Entry: BTreeEntry<Key: BTreePageKeyReadWrite> + BTreeEntryReadWrite;
+    type Block: BlockRefReadWrite<Block: BlockIdReadWrite, Index: ByteIndexReadWrite>;
+    type Trailer: PageTrailerReadWrite;
+    type IntermediateEntry: BTreeEntry<Key = <Self::Entry as BTreeEntry>::Key>
+        + BTreePageEntry<Block: BlockRefReadWrite<Block: BlockIdReadWrite, Index: ByteIndexReadWrite>>
+        + BTreePageEntryReadWrite;
+    type IntermediatePage: BTreePageReadWrite<
+        Entry = Self::IntermediateEntry,
+        Trailer = Self::Trailer,
+    >;
+    type LeafPage: BTreePageReadWrite<Entry = Self::Entry, Trailer = Self::Trailer>;
+
+    fn read<R: Read + Seek>(f: &mut R, block: Self::Block) -> io::Result<Self>;
+    fn write<W: Write + Seek>(&self, f: &mut W, block: Self::Block) -> io::Result<()>;
+    fn find_entry<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        key: <Self::Entry as BTreeEntry>::Key,
+    ) -> io::Result<Self::Entry>;
+}
+
 pub enum UnicodeBTree<LeafPage, Entry>
 where
     LeafPage: UnicodeBTreePageReadWrite<Entry>,
@@ -1721,7 +1743,21 @@ where
     LeafPage: UnicodeBTreePageReadWrite<Entry>,
     Entry: BTreeEntryReadWrite + BTreeEntry<Key: PartialEq<u64>>,
 {
-    pub fn read<R: Read + Seek>(f: &mut R, block: UnicodeBlockRef) -> io::Result<Self> {
+}
+
+impl<LeafPage, Entry> RootBTree for UnicodeBTree<LeafPage, Entry>
+where
+    LeafPage: UnicodeBTreePageReadWrite<Entry>,
+    Entry: BTreeEntryReadWrite + BTreeEntry<Key = u64>,
+{
+    type Entry = Entry;
+    type Block = UnicodeBlockRef;
+    type Trailer = UnicodePageTrailer;
+    type IntermediateEntry = UnicodeBTreePageEntry;
+    type IntermediatePage = UnicodeBTreeEntryPage;
+    type LeafPage = LeafPage;
+
+    fn read<R: Read + Seek>(f: &mut R, block: UnicodeBlockRef) -> io::Result<Self> {
         f.seek(SeekFrom::Start(block.index().index()))?;
 
         let mut buffer = [0_u8; 512];
@@ -1739,7 +1775,7 @@ where
         })
     }
 
-    pub fn write<W: Write + Seek>(&self, f: &mut W, block: UnicodeBlockRef) -> io::Result<()> {
+    fn write<W: Write + Seek>(&self, f: &mut W, block: UnicodeBlockRef) -> io::Result<()> {
         f.seek(SeekFrom::Start(block.index().index()))?;
 
         match self {
@@ -1748,7 +1784,7 @@ where
         }
     }
 
-    pub fn find_entry<R: Read + Seek>(&self, f: &mut R, key: u64) -> io::Result<Entry> {
+    fn find_entry<R: Read + Seek>(&self, f: &mut R, key: u64) -> io::Result<Entry> {
         match self {
             UnicodeBTree::Intermediate(page) => {
                 let page = page
@@ -1785,19 +1821,26 @@ where
     Leaf(Box<LeafPage>, PhantomData<Entry>),
 }
 
-impl<LeafPage, Entry> AnsiBTree<LeafPage, Entry>
+impl<LeafPage, Entry> RootBTree for AnsiBTree<LeafPage, Entry>
 where
     LeafPage: AnsiBTreePageReadWrite<Entry>,
-    Entry: BTreeEntryReadWrite + BTreeEntry<Key: PartialEq<u32>>,
+    Entry: BTreeEntryReadWrite + BTreeEntry<Key = u32>,
 {
-    pub fn read<R: Read + Seek>(f: &mut R, block: AnsiBlockRef) -> io::Result<Self> {
+    type Entry = Entry;
+    type Block = AnsiBlockRef;
+    type Trailer = AnsiPageTrailer;
+    type IntermediateEntry = AnsiBTreePageEntry;
+    type IntermediatePage = AnsiBTreeEntryPage;
+    type LeafPage = LeafPage;
+
+    fn read<R: Read + Seek>(f: &mut R, block: AnsiBlockRef) -> io::Result<Self> {
         f.seek(SeekFrom::Start(u64::from(block.index().index())))?;
 
         let mut buffer = [0_u8; 512];
         f.read_exact(&mut buffer)?;
         let mut cursor = Cursor::new(buffer);
 
-        cursor.seek(SeekFrom::Start(ANSI_BTREE_ENTRIES_SIZE as u64 + 3))?;
+        cursor.seek(SeekFrom::Start(UNICODE_BTREE_ENTRIES_SIZE as u64 + 3))?;
         let level = cursor.read_u8()?;
 
         cursor.seek(SeekFrom::Start(0))?;
@@ -1808,7 +1851,7 @@ where
         })
     }
 
-    pub fn write<W: Write + Seek>(&self, f: &mut W, block: AnsiBlockRef) -> io::Result<()> {
+    fn write<W: Write + Seek>(&self, f: &mut W, block: AnsiBlockRef) -> io::Result<()> {
         f.seek(SeekFrom::Start(u64::from(block.index().index())))?;
 
         match self {
@@ -1817,7 +1860,7 @@ where
         }
     }
 
-    pub fn find_entry<R: Read + Seek>(&self, f: &mut R, key: u32) -> io::Result<Entry> {
+    fn find_entry<R: Read + Seek>(&self, f: &mut R, key: u32) -> io::Result<Entry> {
         match self {
             AnsiBTree::Intermediate(page) => {
                 let page = page

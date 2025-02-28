@@ -470,7 +470,15 @@ impl From<AnsiDataTreeEntry> for AnsiBlockId {
 
 /// [XBLOCK](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/5b7a6935-e83d-4917-9f62-6ce3707f09e0)
 /// / [XXBLOCK](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/061b6ac4-d1da-468c-b75d-0303a0a8f468)
-pub struct DataTreeBlock<Entry, Trailer>
+pub trait DataTreeBlock<Entry, Trailer>:
+    IntermediateTreeBlock<Header = DataTreeBlockHeader, Entry = Entry, Trailer = Trailer>
+where
+    Entry: IntermediateTreeEntry,
+    Trailer: BlockTrailer,
+{
+}
+
+struct DataTreeBlockInner<Entry, Trailer>
 where
     Entry: IntermediateTreeEntry,
     Trailer: BlockTrailer,
@@ -480,7 +488,7 @@ where
     trailer: Trailer,
 }
 
-impl<Entry, Trailer> DataTreeBlock<Entry, Trailer>
+impl<Entry, Trailer> DataTreeBlockInner<Entry, Trailer>
 where
     Entry: IntermediateTreeEntry,
     Trailer: BlockTrailer,
@@ -500,40 +508,73 @@ where
     }
 }
 
-impl<Entry, Trailer> IntermediateTreeBlock for DataTreeBlock<Entry, Trailer>
-where
-    Entry: IntermediateTreeEntry,
-    Trailer: BlockTrailer,
-{
+pub struct UnicodeDataTreeBlock {
+    inner: DataTreeBlockInner<UnicodeDataTreeEntry, UnicodeBlockTrailer>,
+}
+
+impl IntermediateTreeBlock for UnicodeDataTreeBlock {
     type Header = DataTreeBlockHeader;
-    type Entry = Entry;
-    type Trailer = Trailer;
+    type Entry = UnicodeDataTreeEntry;
+    type Trailer = UnicodeBlockTrailer;
 
     fn header(&self) -> &Self::Header {
-        &self.header
+        &self.inner.header
     }
 
     fn entries(&self) -> &[Self::Entry] {
-        &self.entries
+        &self.inner.entries
     }
 
-    fn trailer(&self) -> &Trailer {
-        &self.trailer
-    }
-}
-
-impl<Entry, Trailer> IntermediateTreeBlockReadWrite for DataTreeBlock<Entry, Trailer>
-where
-    Entry: IntermediateTreeEntryReadWrite,
-    Trailer: BlockTrailerReadWrite,
-{
-    fn new(header: DataTreeBlockHeader, entries: Vec<Entry>, trailer: Trailer) -> NdbResult<Self> {
-        Self::new(header, entries, trailer)
+    fn trailer(&self) -> &Self::Trailer {
+        &self.inner.trailer
     }
 }
 
-pub type UnicodeDataTreeBlock = DataTreeBlock<UnicodeDataTreeEntry, UnicodeBlockTrailer>;
-pub type AnsiDataTreeBlock = DataTreeBlock<AnsiDataTreeEntry, AnsiBlockTrailer>;
+impl IntermediateTreeBlockReadWrite for UnicodeDataTreeBlock {
+    fn new(
+        header: DataTreeBlockHeader,
+        entries: Vec<UnicodeDataTreeEntry>,
+        trailer: UnicodeBlockTrailer,
+    ) -> NdbResult<Self> {
+        Ok(Self {
+            inner: DataTreeBlockInner::new(header, entries, trailer)?,
+        })
+    }
+}
+
+pub struct AnsiDataTreeBlock {
+    inner: DataTreeBlockInner<AnsiDataTreeEntry, AnsiBlockTrailer>,
+}
+
+impl IntermediateTreeBlock for AnsiDataTreeBlock {
+    type Header = DataTreeBlockHeader;
+    type Entry = AnsiDataTreeEntry;
+    type Trailer = AnsiBlockTrailer;
+
+    fn header(&self) -> &Self::Header {
+        &self.inner.header
+    }
+
+    fn entries(&self) -> &[Self::Entry] {
+        &self.inner.entries
+    }
+
+    fn trailer(&self) -> &Self::Trailer {
+        &self.inner.trailer
+    }
+}
+
+impl IntermediateTreeBlockReadWrite for AnsiDataTreeBlock {
+    fn new(
+        header: DataTreeBlockHeader,
+        entries: Vec<AnsiDataTreeEntry>,
+        trailer: AnsiBlockTrailer,
+    ) -> NdbResult<Self> {
+        Ok(Self {
+            inner: DataTreeBlockInner::new(header, entries, trailer)?,
+        })
+    }
+}
 
 pub enum UnicodeDataTree {
     Intermediate(Box<UnicodeDataTreeBlock>),
@@ -576,6 +617,29 @@ impl UnicodeDataTree {
             UnicodeDataTree::Leaf(block) => block.write(f),
         }
     }
+
+    pub fn blocks<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_btree: &UnicodeBlockBTree,
+    ) -> io::Result<Box<dyn Iterator<Item = UnicodeDataBlock>>> {
+        match self {
+            UnicodeDataTree::Intermediate(block) => {
+                let blocks = block
+                    .entries()
+                    .iter()
+                    .map(|entry| {
+                        let data_block = block_btree.find_entry(f, u64::from(entry.block()))?;
+                        let data_tree = UnicodeDataTree::read(&mut *f, encoding, &data_block)?;
+                        data_tree.blocks(f, encoding, block_btree)
+                    })
+                    .collect::<io::Result<Vec<_>>>()?;
+                Ok(Box::new(blocks.into_iter().flatten()))
+            }
+            UnicodeDataTree::Leaf(block) => Ok(Box::new(Some(block.as_ref()).cloned().into_iter())),
+        }
+    }
 }
 
 pub enum AnsiDataTree {
@@ -613,6 +677,29 @@ impl AnsiDataTree {
         match self {
             AnsiDataTree::Intermediate(block) => block.write(f),
             AnsiDataTree::Leaf(block) => block.write(f),
+        }
+    }
+
+    pub fn blocks<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_btree: &AnsiBlockBTree,
+    ) -> io::Result<Vec<AnsiDataBlock>> {
+        match self {
+            AnsiDataTree::Intermediate(block) => {
+                let blocks = block
+                    .entries()
+                    .iter()
+                    .map(|entry| {
+                        let data_block = block_btree.find_entry(f, u32::from(entry.block()))?;
+                        let data_tree = AnsiDataTree::read(&mut *f, encoding, &data_block)?;
+                        data_tree.blocks(f, encoding, block_btree)
+                    })
+                    .collect::<io::Result<Vec<_>>>()?;
+                Ok(blocks.into_iter().flatten().collect())
+            }
+            AnsiDataTree::Leaf(block) => Ok(vec![block.as_ref().clone()]),
         }
     }
 }

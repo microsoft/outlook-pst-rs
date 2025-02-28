@@ -10,7 +10,7 @@ use outlook_pst::{
         header::{Header, NdbCryptMethod},
         node_id::NodeId,
         page::{
-            BTreeEntry, BTreePage, BTreePageEntry, BlockBTreeEntry, NodeBTreeEntry,
+            BTreeEntry, BTreePage, BTreePageEntry, BlockBTreeEntry, NodeBTreeEntry, RootBTree,
             UnicodeBlockBTree, UnicodeNodeBTree,
         },
         root::Root,
