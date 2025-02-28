@@ -685,7 +685,7 @@ impl AnsiDataTree {
         f: &mut R,
         encoding: NdbCryptMethod,
         block_btree: &AnsiBlockBTree,
-    ) -> io::Result<Vec<AnsiDataBlock>> {
+    ) -> io::Result<Box<dyn Iterator<Item = AnsiDataBlock>>> {
         match self {
             AnsiDataTree::Intermediate(block) => {
                 let blocks = block
@@ -697,9 +697,9 @@ impl AnsiDataTree {
                         data_tree.blocks(f, encoding, block_btree)
                     })
                     .collect::<io::Result<Vec<_>>>()?;
-                Ok(blocks.into_iter().flatten().collect())
+                Ok(Box::new(blocks.into_iter().flatten()))
             }
-            AnsiDataTree::Leaf(block) => Ok(vec![block.as_ref().clone()]),
+            AnsiDataTree::Leaf(block) => Ok(Box::new(Some(block.as_ref()).cloned().into_iter())),
         }
     }
 }

@@ -10,10 +10,13 @@ use std::{
 
 use super::{heap::*, prop_type::*, read_write::*, tree::*, *};
 use crate::ndb::{
-    block::{Block, UnicodeDataTree},
+    block::{AnsiDataTree, Block, UnicodeDataTree},
     header::NdbCryptMethod,
     node_id::{NodeId, NodeIdType},
-    page::{NodeBTreeEntry, RootBTree, UnicodeBlockBTree, UnicodeNodeBTree},
+    page::{
+        AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, RootBTree, UnicodeBlockBTree,
+        UnicodeNodeBTree,
+    },
     read_write::*,
 };
 
@@ -824,7 +827,7 @@ impl PropertyValueReadWrite for PropertyValue {
                     let offset = u32::try_from(start)
                         .map_err(|_| LtpError::InvalidMultiValuePropertyOffset(start))?;
                     f.write_u32::<LittleEndian>(offset)?;
-                    start += value.buffer().len() * mem::size_of::<u16>();
+                    start += mem::size_of_val(value.buffer());
                 }
 
                 // rgDataItems
@@ -923,8 +926,8 @@ impl UnicodePropertyContext {
         &self,
         f: &mut R,
         encoding: NdbCryptMethod,
-        block_tree: &UnicodeBlockBTree,
-        node_tree: &UnicodeNodeBTree,
+        block_btree: &UnicodeBlockBTree,
+        node_btree: &UnicodeNodeBTree,
         value: PropertyTreeRecordValue,
     ) -> io::Result<PropertyValue> {
         match value.value() {
@@ -932,15 +935,89 @@ impl UnicodePropertyContext {
                 let data = self
                     .tree
                     .heap()
-                    .find_entry(heap_id, f, encoding, block_tree)?;
+                    .find_entry(heap_id, f, encoding, block_btree)?;
                 let mut cursor = Cursor::new(data);
                 PropertyValue::read(&mut cursor, value.prop_type())
             }
             PropertyValueRecord::Node(node_id) => {
-                let node = node_tree.find_entry(f, u64::from(u32::from(node_id)))?;
-                let block = block_tree.find_entry(f, u64::from(node.data()))?;
+                let node = node_btree.find_entry(f, u64::from(u32::from(node_id)))?;
+                let block = block_btree.find_entry(f, u64::from(node.data()))?;
                 let data_tree = UnicodeDataTree::read(f, encoding, &block)?;
-                let blocks: Vec<_> = data_tree.blocks(f, encoding, &block_tree)?.collect();
+                let blocks: Vec<_> = data_tree.blocks(f, encoding, block_btree)?.collect();
+                let data: Vec<_> = blocks
+                    .iter()
+                    .flat_map(|block| block.data())
+                    .copied()
+                    .collect();
+                let mut cursor = Cursor::new(data);
+                PropertyValue::read(&mut cursor, value.prop_type())
+            }
+            small => small
+                .small_value(value.prop_type())
+                .ok_or(LtpError::InvalidSmallPropertyType(value.prop_type()).into()),
+        }
+    }
+}
+
+pub struct AnsiPropertyContext {
+    tree: AnsiHeapTree,
+}
+
+impl AnsiPropertyContext {
+    pub fn new(tree: AnsiHeapTree) -> Self {
+        Self { tree }
+    }
+
+    pub fn tree(&self) -> &AnsiHeapTree {
+        &self.tree
+    }
+
+    pub fn properties<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_tree: &AnsiBlockBTree,
+    ) -> io::Result<BTreeMap<PropertyTreeRecordKey, PropertyTreeRecordValue>> {
+        Ok(self
+            .tree
+            .entries(f, encoding, block_tree)?
+            .into_iter()
+            .map(
+                |entry: HeapTreeLeafEntry<PropertyTreeRecordKey, PropertyTreeRecordValue>| {
+                    (
+                        entry.key(),
+                        PropertyTreeRecordValue::new(
+                            entry.data().prop_type(),
+                            entry.data().value(),
+                        ),
+                    )
+                },
+            )
+            .collect())
+    }
+
+    pub fn read_property<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_btree: &AnsiBlockBTree,
+        node_btree: &AnsiNodeBTree,
+        value: PropertyTreeRecordValue,
+    ) -> io::Result<PropertyValue> {
+        match value.value() {
+            PropertyValueRecord::Heap(heap_id) => {
+                let data = self
+                    .tree
+                    .heap()
+                    .find_entry(heap_id, f, encoding, block_btree)?;
+                let mut cursor = Cursor::new(data);
+                PropertyValue::read(&mut cursor, value.prop_type())
+            }
+            PropertyValueRecord::Node(node_id) => {
+                let node = node_btree.find_entry(f, u32::from(node_id))?;
+                let block = block_btree.find_entry(f, u32::from(node.data()))?;
+                let data_tree = AnsiDataTree::read(f, encoding, &block)?;
+                let blocks: Vec<_> = data_tree.blocks(f, encoding, block_btree)?.collect();
                 let data: Vec<_> = blocks
                     .iter()
                     .flat_map(|block| block.data())

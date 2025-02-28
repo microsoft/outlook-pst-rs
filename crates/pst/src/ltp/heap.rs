@@ -521,7 +521,6 @@ impl UnicodeHeapNode {
         let block = self
             .data
             .blocks(f, encoding, block_tree)?
-            .into_iter()
             .next()
             .ok_or(LtpError::HeapBlockIndexNotFound(0))?;
 
@@ -541,9 +540,7 @@ impl UnicodeHeapNode {
         let block = self
             .data
             .blocks(f, encoding, block_tree)?
-            .into_iter()
-            .skip(block_index as usize)
-            .next()
+            .nth(block_index as usize)
             .ok_or(LtpError::HeapBlockIndexNotFound(block_index))?;
 
         let mut cursor = Cursor::new(block.data());
@@ -601,7 +598,6 @@ impl AnsiHeapNode {
         let block = self
             .data
             .blocks(f, encoding, block_tree)?
-            .into_iter()
             .next()
             .ok_or(LtpError::HeapBlockIndexNotFound(0))?;
 
@@ -621,9 +617,7 @@ impl AnsiHeapNode {
         let block = self
             .data
             .blocks(f, encoding, block_tree)?
-            .into_iter()
-            .skip(block_index as usize)
-            .next()
+            .nth(block_index as usize)
             .ok_or(LtpError::HeapBlockIndexNotFound(block_index))?;
 
         let mut cursor = Cursor::new(block.data());
