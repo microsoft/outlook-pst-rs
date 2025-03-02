@@ -524,7 +524,7 @@ impl UnicodeHeapNode {
             .next()
             .ok_or(LtpError::HeapBlockIndexNotFound(0))?;
 
-        let mut cursor = Cursor::new(block.data());
+        let mut cursor = block.data();
         let header = HeapNodeHeader::read(&mut cursor)?;
         Ok(header)
     }
@@ -601,7 +601,7 @@ impl AnsiHeapNode {
             .next()
             .ok_or(LtpError::HeapBlockIndexNotFound(0))?;
 
-        let mut cursor = Cursor::new(block.data());
+        let mut cursor = block.data();
         let header = HeapNodeHeader::read(&mut cursor)?;
         Ok(header)
     }

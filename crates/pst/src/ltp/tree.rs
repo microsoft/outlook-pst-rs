@@ -211,7 +211,7 @@ impl UnicodeHeapTree {
             .heap
             .find_entry(self.user_root, f, encoding, block_tree)?;
 
-        let mut cursor = Cursor::new(header.as_slice());
+        let mut cursor = header.as_slice();
         let header = HeapTreeHeader::read(&mut cursor)?;
         Ok(header)
     }
@@ -263,6 +263,12 @@ impl UnicodeHeapTree {
     }
 }
 
+impl From<UnicodeHeapTree> for UnicodeHeapNode {
+    fn from(value: UnicodeHeapTree) -> Self {
+        value.heap
+    }
+}
+
 pub struct AnsiHeapTree {
     heap: AnsiHeapNode,
     user_root: HeapId,
@@ -287,7 +293,7 @@ impl AnsiHeapTree {
             .heap
             .find_entry(self.user_root, f, encoding, block_tree)?;
 
-        let mut cursor = Cursor::new(header.as_slice());
+        let mut cursor = header.as_slice();
         let header = HeapTreeHeader::read(&mut cursor)?;
         Ok(header)
     }
@@ -336,5 +342,11 @@ impl AnsiHeapTree {
         }
 
         Ok(results)
+    }
+}
+
+impl From<AnsiHeapTree> for AnsiHeapNode {
+    fn from(value: AnsiHeapTree) -> Self {
+        value.heap
     }
 }

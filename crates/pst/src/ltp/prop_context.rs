@@ -200,10 +200,6 @@ pub struct String8Value {
 }
 
 impl String8Value {
-    pub fn new(buffer: Vec<u8>) -> LtpResult<Self> {
-        Ok(Self { buffer })
-    }
-
     pub fn buffer(&self) -> &[u8] {
         &self.buffer
     }
@@ -222,10 +218,6 @@ pub struct UnicodeValue {
 }
 
 impl UnicodeValue {
-    pub fn new(buffer: Vec<u16>) -> LtpResult<Self> {
-        Ok(Self { buffer })
-    }
-
     pub fn buffer(&self) -> &[u16] {
         &self.buffer
     }
@@ -281,6 +273,29 @@ impl Debug for GuidValue {
             self.data4[6],
             self.data4[7]
         )
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct BinaryValue {
+    buffer: Vec<u8>,
+}
+
+impl BinaryValue {
+    pub fn buffer(&self) -> &[u8] {
+        &self.buffer
+    }
+}
+
+impl Debug for BinaryValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = self
+            .buffer
+            .iter()
+            .map(|ch| format!("{ch:02X}"))
+            .collect::<Vec<_>>()
+            .join("-");
+        write!(f, "BinaryValue {{ {value} }}")
     }
 }
 
@@ -349,7 +364,7 @@ pub enum PropertyValue {
     /// `PtypGuid`: 16 bytes; a GUID with Data1, Data2, and Data3 fields in little-endian format
     Guid(GuidValue),
     /// `PtypBinary`: Variable size; a COUNT field followed by that many bytes.
-    Binary(Vec<u8>),
+    Binary(BinaryValue),
     /// `PtypObject`: The property value is a Component Object Model (COM) object, as specified in
     /// section [2.11.1.5](https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-oxcdata/5a024c95-2264-4832-9840-d6260c9c2cdb).
     Object(ObjectValue),
@@ -389,7 +404,7 @@ pub enum PropertyValue {
     MultipleGuid(Vec<GuidValue>),
     /// `PtypMultipleBinary`: Variable size; a COUNT field followed by that many
     /// [PropertyValue::Binary] values.
-    MultipleBinary(Vec<Vec<u8>>),
+    MultipleBinary(Vec<BinaryValue>),
 }
 
 impl From<&PropertyValue> for PropertyType {
@@ -453,7 +468,7 @@ impl PropertyValueReadWrite for PropertyValue {
             PropertyType::String8 => {
                 let mut buffer = Vec::new();
                 f.read_to_end(&mut buffer)?;
-                Ok(Self::String8(String8Value::new(buffer)?))
+                Ok(Self::String8(String8Value { buffer }))
             }
 
             PropertyType::Unicode => {
@@ -461,7 +476,7 @@ impl PropertyValueReadWrite for PropertyValue {
                 while let Ok(ch) = f.read_u16::<LittleEndian>() {
                     buffer.push(ch);
                 }
-                Ok(Self::Unicode(UnicodeValue::new(buffer)?))
+                Ok(Self::Unicode(UnicodeValue { buffer }))
             }
 
             PropertyType::Time => {
@@ -486,7 +501,7 @@ impl PropertyValueReadWrite for PropertyValue {
             PropertyType::Binary => {
                 let mut buffer = Vec::new();
                 f.read_to_end(&mut buffer)?;
-                Ok(Self::Binary(buffer))
+                Ok(Self::Binary(BinaryValue { buffer }))
             }
 
             PropertyType::Object => {
@@ -586,7 +601,7 @@ impl PropertyValueReadWrite for PropertyValue {
                         buffer
                     };
 
-                    values.push(String8Value::new(buffer)?);
+                    values.push(String8Value { buffer });
                 }
 
                 Ok(Self::MultipleString8(values))
@@ -629,7 +644,7 @@ impl PropertyValueReadWrite for PropertyValue {
                         }
                     };
 
-                    values.push(UnicodeValue::new(buffer)?);
+                    values.push(UnicodeValue { buffer });
                 }
 
                 Ok(Self::MultipleUnicode(values))
@@ -698,7 +713,7 @@ impl PropertyValueReadWrite for PropertyValue {
                         buffer
                     };
 
-                    values.push(buffer);
+                    values.push(BinaryValue { buffer });
                 }
 
                 Ok(Self::MultipleBinary(values))
@@ -736,7 +751,7 @@ impl PropertyValueReadWrite for PropertyValue {
                 f.write_all(&value.data4)
             }
 
-            Self::Binary(buffer) => f.write_all(buffer),
+            Self::Binary(value) => f.write_all(value.buffer()),
 
             Self::Object(value) => {
                 value.node_id.write(f)?;
@@ -869,12 +884,12 @@ impl PropertyValueReadWrite for PropertyValue {
                     let offset = u32::try_from(start)
                         .map_err(|_| LtpError::InvalidMultiValuePropertyOffset(start))?;
                     f.write_u32::<LittleEndian>(offset)?;
-                    start += value.len();
+                    start += value.buffer().len();
                 }
 
                 // rgDataItems
                 for value in values {
-                    f.write_all(value)?;
+                    f.write_all(value.buffer())?;
                 }
 
                 Ok(())

@@ -258,7 +258,7 @@ where
         for i in 0..entry_count {
             let offset = i * usize::from(entry_size);
             let end = offset + usize::from(entry_size);
-            let mut cursor = Cursor::new(&buffer[offset..end]);
+            let mut cursor = &buffer[offset..end];
             entries.push(<Self::Entry as BTreeEntryReadWrite>::read(&mut cursor)?);
         }
 
@@ -279,7 +279,7 @@ where
         for (i, entry) in entries.iter().enumerate() {
             let offset = i * usize::from(self.entry_size());
             let end = offset + usize::from(self.entry_size());
-            let mut cursor = Cursor::new(&mut buffer[offset..end]);
+            let mut cursor = &mut buffer[offset..end];
             <Self::Entry as BTreeEntryReadWrite>::write(entry, &mut cursor)?;
         }
 
@@ -374,7 +374,7 @@ where
         for i in 0..entry_count {
             let offset = i * usize::from(entry_size);
             let end = offset + usize::from(entry_size);
-            let mut cursor = Cursor::new(&buffer[offset..end]);
+            let mut cursor = &buffer[offset..end];
             entries.push(<Self::Entry as BTreeEntryReadWrite>::read(&mut cursor)?);
         }
 
@@ -395,7 +395,7 @@ where
         for (i, entry) in entries.iter().enumerate() {
             let offset = i * usize::from(self.entry_size());
             let end = offset + usize::from(self.entry_size());
-            let mut cursor = Cursor::new(&mut buffer[offset..end]);
+            let mut cursor = &mut buffer[offset..end];
             <Self::Entry as BTreeEntryReadWrite>::write(entry, &mut cursor)?;
         }
 
