@@ -234,6 +234,10 @@ impl UnicodeHeapTree {
             return Err(LtpError::InvalidHeapTreeDataSize(header.entry_size()).into());
         }
 
+        if u32::from(header.root()) == 0 {
+            return Ok(Default::default());
+        }
+
         let mut level = header.levels();
         let mut next_level = vec![header.root()];
 
@@ -314,6 +318,10 @@ impl AnsiHeapTree {
         }
         if header.entry_size() != V::SIZE {
             return Err(LtpError::InvalidHeapTreeDataSize(header.entry_size()).into());
+        }
+
+        if u32::from(header.root()) == 0 {
+            return Ok(Default::default());
         }
 
         let mut level = header.levels();
