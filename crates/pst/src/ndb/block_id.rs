@@ -1,7 +1,10 @@
 //! [BID (Block ID)](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/d3155aa1-ccdd-4dee-a0a9-5363ccca5352)
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{self, Read, Write};
+use std::{
+    fmt::Debug,
+    io::{self, Read, Write},
+};
 
 use super::{read_write::*, *};
 
@@ -14,7 +17,7 @@ pub trait BlockId: Copy + Sized {
 
 pub const MAX_UNICODE_BLOCK_INDEX: u64 = 1_u64.rotate_right(2) - 1;
 
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default)]
 pub struct UnicodeBlockId(u64);
 
 impl UnicodeBlockId {
@@ -53,6 +56,21 @@ impl BlockIdReadWrite for UnicodeBlockId {
     }
 }
 
+impl Debug for UnicodeBlockId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "UnicodeBlockId {{ {}: 0x{:X} }}",
+            if self.is_internal() {
+                "internal"
+            } else {
+                "leaf"
+            },
+            self.index()
+        )
+    }
+}
+
 impl From<u64> for UnicodeBlockId {
     fn from(value: u64) -> Self {
         Self(value)
@@ -67,7 +85,7 @@ impl From<UnicodeBlockId> for u64 {
 
 pub const MAX_ANSI_BLOCK_INDEX: u32 = 1_u32.rotate_right(2) - 1;
 
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default)]
 pub struct AnsiBlockId(u32);
 
 impl AnsiBlockId {
@@ -103,6 +121,21 @@ impl BlockIdReadWrite for AnsiBlockId {
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         f.write_u32::<LittleEndian>(self.0)
+    }
+}
+
+impl Debug for AnsiBlockId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "AnsiBlockId {{ {}: 0x{:X} }}",
+            if self.is_internal() {
+                "internal"
+            } else {
+                "leaf"
+            },
+            self.index()
+        )
     }
 }
 

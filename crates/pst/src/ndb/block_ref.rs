@@ -6,7 +6,7 @@ pub trait BlockRef {
     type Block: BlockId;
     type Index: ByteIndex;
 
-    fn block(&self) -> &Self::Block;
+    fn block(&self) -> Self::Block;
     fn index(&self) -> Self::Index;
 }
 
@@ -26,8 +26,8 @@ impl BlockRef for UnicodeBlockRef {
     type Block = UnicodeBlockId;
     type Index = UnicodeByteIndex;
 
-    fn block(&self) -> &UnicodeBlockId {
-        &self.block
+    fn block(&self) -> UnicodeBlockId {
+        self.block
     }
 
     fn index(&self) -> UnicodeByteIndex {
@@ -57,8 +57,8 @@ impl BlockRef for AnsiBlockRef {
     type Block = AnsiBlockId;
     type Index = AnsiByteIndex;
 
-    fn block(&self) -> &AnsiBlockId {
-        &self.block
+    fn block(&self) -> AnsiBlockId {
+        self.block
     }
 
     fn index(&self) -> AnsiByteIndex {

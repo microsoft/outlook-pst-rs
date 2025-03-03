@@ -1,9 +1,9 @@
 //! [Blocks](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/a9c1981d-d1ea-457c-b39e-dc7fb0eb95d4)
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{self, Read, Write};
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
-use super::{block_id::*, node_id::*, read_write::*, *};
+use super::{block_id::*, block_ref::*, byte_index::*, node_id::*, page::*, read_write::*, *};
 
 pub const MAX_BLOCK_SIZE: u16 = 8192;
 
@@ -470,7 +470,15 @@ impl From<AnsiDataTreeEntry> for AnsiBlockId {
 
 /// [XBLOCK](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/5b7a6935-e83d-4917-9f62-6ce3707f09e0)
 /// / [XXBLOCK](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/061b6ac4-d1da-468c-b75d-0303a0a8f468)
-pub struct DataTreeBlock<Entry, Trailer>
+pub trait DataTreeBlock<Entry, Trailer>:
+    IntermediateTreeBlock<Header = DataTreeBlockHeader, Entry = Entry, Trailer = Trailer>
+where
+    Entry: IntermediateTreeEntry,
+    Trailer: BlockTrailer,
+{
+}
+
+struct DataTreeBlockInner<Entry, Trailer>
 where
     Entry: IntermediateTreeEntry,
     Trailer: BlockTrailer,
@@ -480,7 +488,7 @@ where
     trailer: Trailer,
 }
 
-impl<Entry, Trailer> DataTreeBlock<Entry, Trailer>
+impl<Entry, Trailer> DataTreeBlockInner<Entry, Trailer>
 where
     Entry: IntermediateTreeEntry,
     Trailer: BlockTrailer,
@@ -500,40 +508,201 @@ where
     }
 }
 
-impl<Entry, Trailer> IntermediateTreeBlock for DataTreeBlock<Entry, Trailer>
-where
-    Entry: IntermediateTreeEntry,
-    Trailer: BlockTrailer,
-{
+pub struct UnicodeDataTreeBlock {
+    inner: DataTreeBlockInner<UnicodeDataTreeEntry, UnicodeBlockTrailer>,
+}
+
+impl IntermediateTreeBlock for UnicodeDataTreeBlock {
     type Header = DataTreeBlockHeader;
-    type Entry = Entry;
-    type Trailer = Trailer;
+    type Entry = UnicodeDataTreeEntry;
+    type Trailer = UnicodeBlockTrailer;
 
     fn header(&self) -> &Self::Header {
-        &self.header
+        &self.inner.header
     }
 
     fn entries(&self) -> &[Self::Entry] {
-        &self.entries
+        &self.inner.entries
     }
 
-    fn trailer(&self) -> &Trailer {
-        &self.trailer
-    }
-}
-
-impl<Entry, Trailer> IntermediateTreeBlockReadWrite for DataTreeBlock<Entry, Trailer>
-where
-    Entry: IntermediateTreeEntryReadWrite,
-    Trailer: BlockTrailerReadWrite,
-{
-    fn new(header: DataTreeBlockHeader, entries: Vec<Entry>, trailer: Trailer) -> NdbResult<Self> {
-        Self::new(header, entries, trailer)
+    fn trailer(&self) -> &Self::Trailer {
+        &self.inner.trailer
     }
 }
 
-pub type UnicodeDataTreeBlock = DataTreeBlock<UnicodeDataTreeEntry, UnicodeBlockTrailer>;
-pub type AnsiDataTreeBlock = DataTreeBlock<AnsiDataTreeEntry, AnsiBlockTrailer>;
+impl IntermediateTreeBlockReadWrite for UnicodeDataTreeBlock {
+    fn new(
+        header: DataTreeBlockHeader,
+        entries: Vec<UnicodeDataTreeEntry>,
+        trailer: UnicodeBlockTrailer,
+    ) -> NdbResult<Self> {
+        Ok(Self {
+            inner: DataTreeBlockInner::new(header, entries, trailer)?,
+        })
+    }
+}
+
+pub struct AnsiDataTreeBlock {
+    inner: DataTreeBlockInner<AnsiDataTreeEntry, AnsiBlockTrailer>,
+}
+
+impl IntermediateTreeBlock for AnsiDataTreeBlock {
+    type Header = DataTreeBlockHeader;
+    type Entry = AnsiDataTreeEntry;
+    type Trailer = AnsiBlockTrailer;
+
+    fn header(&self) -> &Self::Header {
+        &self.inner.header
+    }
+
+    fn entries(&self) -> &[Self::Entry] {
+        &self.inner.entries
+    }
+
+    fn trailer(&self) -> &Self::Trailer {
+        &self.inner.trailer
+    }
+}
+
+impl IntermediateTreeBlockReadWrite for AnsiDataTreeBlock {
+    fn new(
+        header: DataTreeBlockHeader,
+        entries: Vec<AnsiDataTreeEntry>,
+        trailer: AnsiBlockTrailer,
+    ) -> NdbResult<Self> {
+        Ok(Self {
+            inner: DataTreeBlockInner::new(header, entries, trailer)?,
+        })
+    }
+}
+
+pub enum UnicodeDataTree {
+    Intermediate(Box<UnicodeDataTreeBlock>),
+    Leaf(Box<UnicodeDataBlock>),
+}
+
+impl UnicodeDataTree {
+    pub fn read<R: Read + Seek>(
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block: &UnicodeBlockBTreeEntry,
+    ) -> io::Result<Self> {
+        f.seek(SeekFrom::Start(block.block().index().index()))?;
+
+        let block_size = block_size(block.size() + UnicodeBlockTrailer::SIZE);
+        let mut data = vec![0; block_size as usize];
+        f.read_exact(&mut data)?;
+        let mut cursor = Cursor::new(data);
+
+        if block.block().block().is_internal() {
+            let header = DataTreeBlockHeader::read(&mut cursor)?;
+            cursor.seek(SeekFrom::Start(0))?;
+            let block = UnicodeDataTreeBlock::read(&mut cursor, header, block.size())?;
+            Ok(UnicodeDataTree::Intermediate(Box::new(block)))
+        } else {
+            let block = UnicodeDataBlock::read(&mut cursor, block.size(), encoding)?;
+            Ok(UnicodeDataTree::Leaf(Box::new(block)))
+        }
+    }
+
+    pub fn write<W: Write + Seek>(
+        &self,
+        f: &mut W,
+        block: &UnicodeBlockBTreeEntry,
+    ) -> io::Result<()> {
+        f.seek(SeekFrom::Start(block.block().index().index()))?;
+
+        match self {
+            UnicodeDataTree::Intermediate(block) => block.write(f),
+            UnicodeDataTree::Leaf(block) => block.write(f),
+        }
+    }
+
+    pub fn blocks<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_btree: &UnicodeBlockBTree,
+    ) -> io::Result<Box<dyn Iterator<Item = UnicodeDataBlock>>> {
+        match self {
+            UnicodeDataTree::Intermediate(block) => {
+                let blocks = block
+                    .entries()
+                    .iter()
+                    .map(|entry| {
+                        let data_block = block_btree.find_entry(f, u64::from(entry.block()))?;
+                        let data_tree = UnicodeDataTree::read(&mut *f, encoding, &data_block)?;
+                        data_tree.blocks(f, encoding, block_btree)
+                    })
+                    .collect::<io::Result<Vec<_>>>()?;
+                Ok(Box::new(blocks.into_iter().flatten()))
+            }
+            UnicodeDataTree::Leaf(block) => Ok(Box::new(Some(block.as_ref()).cloned().into_iter())),
+        }
+    }
+}
+
+pub enum AnsiDataTree {
+    Intermediate(Box<AnsiDataTreeBlock>),
+    Leaf(Box<AnsiDataBlock>),
+}
+
+impl AnsiDataTree {
+    pub fn read<R: Read + Seek>(
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block: &AnsiBlockBTreeEntry,
+    ) -> io::Result<Self> {
+        f.seek(SeekFrom::Start(u64::from(block.block().index().index())))?;
+
+        let block_size = block_size(block.size() + AnsiBlockTrailer::SIZE);
+        let mut data = vec![0; block_size as usize];
+        f.read_exact(&mut data)?;
+        let mut cursor = Cursor::new(data);
+
+        if block.block().block().is_internal() {
+            let header = DataTreeBlockHeader::read(&mut cursor)?;
+            cursor.seek(SeekFrom::Start(0))?;
+            let block = AnsiDataTreeBlock::read(&mut cursor, header, block.size())?;
+            Ok(AnsiDataTree::Intermediate(Box::new(block)))
+        } else {
+            let block = AnsiDataBlock::read(&mut cursor, block.size(), encoding)?;
+            Ok(AnsiDataTree::Leaf(Box::new(block)))
+        }
+    }
+
+    pub fn write<W: Write + Seek>(&self, f: &mut W, block: &AnsiBlockBTreeEntry) -> io::Result<()> {
+        f.seek(SeekFrom::Start(u64::from(block.block().index().index())))?;
+
+        match self {
+            AnsiDataTree::Intermediate(block) => block.write(f),
+            AnsiDataTree::Leaf(block) => block.write(f),
+        }
+    }
+
+    pub fn blocks<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_btree: &AnsiBlockBTree,
+    ) -> io::Result<Box<dyn Iterator<Item = AnsiDataBlock>>> {
+        match self {
+            AnsiDataTree::Intermediate(block) => {
+                let blocks = block
+                    .entries()
+                    .iter()
+                    .map(|entry| {
+                        let data_block = block_btree.find_entry(f, u32::from(entry.block()))?;
+                        let data_tree = AnsiDataTree::read(&mut *f, encoding, &data_block)?;
+                        data_tree.blocks(f, encoding, block_btree)
+                    })
+                    .collect::<io::Result<Vec<_>>>()?;
+                Ok(Box::new(blocks.into_iter().flatten()))
+            }
+            AnsiDataTree::Leaf(block) => Ok(Box::new(Some(block.as_ref()).cloned().into_iter())),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Default)]
 struct SubNodeTreeBlockHeader {
@@ -748,10 +917,7 @@ impl IntermediateTreeEntryReadWrite for UnicodeIntermediateSubNodeTreeEntry {
     const ENTRY_SIZE: u16 = 16;
 
     fn read(f: &mut dyn Read) -> io::Result<Self> {
-        let node = f.read_u64::<LittleEndian>()?;
-        let Ok(node) = u32::try_from(node).map(NodeId::from) else {
-            return Err(NdbError::InvalidIntermediateBlockEntryNodeId(node).into());
-        };
+        let node = NodeId::from(f.read_u64::<LittleEndian>()? as u32);
         let block = UnicodeBlockId::read(f)?;
         Ok(Self::new(node, block))
     }
@@ -862,3 +1028,138 @@ pub type UnicodeLeafSubNodeTreeBlock = SubNodeTreeBlock<
 >;
 pub type AnsiLeafSubNodeTreeBlock =
     SubNodeTreeBlock<AnsiSubNodeTreeBlockHeader, AnsiLeafSubNodeTreeEntry, AnsiBlockTrailer>;
+
+pub enum UnicodeSubNodeTree {
+    Intermediate(Box<UnicodeIntermediateSubNodeTreeBlock>),
+    Leaf(Box<UnicodeLeafSubNodeTreeBlock>),
+}
+
+impl UnicodeSubNodeTree {
+    pub fn read<R: Read + Seek>(f: &mut R, block: &UnicodeBlockBTreeEntry) -> io::Result<Self> {
+        f.seek(SeekFrom::Start(block.block().index().index()))?;
+
+        let block_size = block_size(block.size() + UnicodeBlockTrailer::SIZE);
+        let mut data = vec![0; block_size as usize];
+        f.read_exact(&mut data)?;
+        let mut cursor = Cursor::new(data);
+        let header = UnicodeSubNodeTreeBlockHeader::read(&mut cursor)?;
+        cursor.seek(SeekFrom::Start(0))?;
+
+        if header.level() > 0 {
+            let block =
+                UnicodeIntermediateSubNodeTreeBlock::read(&mut cursor, header, block.size())?;
+            Ok(UnicodeSubNodeTree::Intermediate(Box::new(block)))
+        } else {
+            let block = UnicodeLeafSubNodeTreeBlock::read(&mut cursor, header, block.size())?;
+            Ok(UnicodeSubNodeTree::Leaf(Box::new(block)))
+        }
+    }
+
+    pub fn write<W: Write + Seek>(
+        &self,
+        f: &mut W,
+        block: &UnicodeBlockBTreeEntry,
+    ) -> io::Result<()> {
+        f.seek(SeekFrom::Start(block.block().index().index()))?;
+
+        match self {
+            UnicodeSubNodeTree::Intermediate(block) => block.write(f),
+            UnicodeSubNodeTree::Leaf(block) => block.write(f),
+        }
+    }
+
+    pub fn find_entry<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        block_btree: &UnicodeBlockBTree,
+        node: NodeId,
+    ) -> io::Result<UnicodeBlockId> {
+        match self {
+            UnicodeSubNodeTree::Intermediate(block) => {
+                let entry = block
+                    .entries()
+                    .iter()
+                    .take_while(|entry| u32::from(entry.node()) <= u32::from(node))
+                    .last()
+                    .ok_or(NdbError::SubNodeNotFound(node))?;
+                let block = block_btree.find_entry(f, u64::from(entry.block()))?;
+                let page = Self::read(f, &block)?;
+                page.find_entry(f, block_btree, node)
+            }
+            UnicodeSubNodeTree::Leaf(block) => {
+                let entry = block
+                    .entries()
+                    .iter()
+                    .find(|entry| u32::from(entry.node()) == u32::from(node))
+                    .map(|entry| entry.block())
+                    .ok_or(NdbError::SubNodeNotFound(node))?;
+                Ok(entry)
+            }
+        }
+    }
+}
+
+pub enum AnsiSubNodeTree {
+    Intermediate(Box<AnsiIntermediateSubNodeTreeBlock>),
+    Leaf(Box<AnsiLeafSubNodeTreeBlock>),
+}
+
+impl AnsiSubNodeTree {
+    pub fn read<R: Read + Seek>(f: &mut R, block: &AnsiBlockBTreeEntry) -> io::Result<Self> {
+        f.seek(SeekFrom::Start(u64::from(block.block().index().index())))?;
+
+        let block_size = block_size(block.size() + AnsiBlockTrailer::SIZE);
+        let mut data = vec![0; block_size as usize];
+        f.read_exact(&mut data)?;
+        let mut cursor = Cursor::new(data);
+        let header = AnsiSubNodeTreeBlockHeader::read(&mut cursor)?;
+        cursor.seek(SeekFrom::Start(0))?;
+
+        if header.level() > 0 {
+            let block = AnsiIntermediateSubNodeTreeBlock::read(&mut cursor, header, block.size())?;
+            Ok(AnsiSubNodeTree::Intermediate(Box::new(block)))
+        } else {
+            let block = AnsiLeafSubNodeTreeBlock::read(&mut cursor, header, block.size())?;
+            Ok(AnsiSubNodeTree::Leaf(Box::new(block)))
+        }
+    }
+
+    pub fn write<W: Write + Seek>(&self, f: &mut W, block: &AnsiBlockBTreeEntry) -> io::Result<()> {
+        f.seek(SeekFrom::Start(u64::from(block.block().index().index())))?;
+
+        match self {
+            AnsiSubNodeTree::Intermediate(block) => block.write(f),
+            AnsiSubNodeTree::Leaf(block) => block.write(f),
+        }
+    }
+
+    pub fn find_entry<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        block_btree: &AnsiBlockBTree,
+        node: NodeId,
+    ) -> io::Result<AnsiBlockId> {
+        match self {
+            AnsiSubNodeTree::Intermediate(block) => {
+                let entry = block
+                    .entries()
+                    .iter()
+                    .take_while(|entry| u32::from(entry.node()) <= u32::from(node))
+                    .last()
+                    .ok_or(NdbError::SubNodeNotFound(node))?;
+                let block = block_btree.find_entry(f, u32::from(entry.block()))?;
+                let page = Self::read(f, &block)?;
+                page.find_entry(f, block_btree, node)
+            }
+            AnsiSubNodeTree::Leaf(block) => {
+                let entry = block
+                    .entries()
+                    .iter()
+                    .find(|entry| u32::from(entry.node()) == u32::from(node))
+                    .map(|entry| entry.block())
+                    .ok_or(NdbError::SubNodeNotFound(node))?;
+                Ok(entry)
+            }
+        }
+    }
+}

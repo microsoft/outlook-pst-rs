@@ -146,6 +146,11 @@ pub trait DensityListPageReadWrite: DensityListPage + Sized {
     fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()>;
 }
 
+pub trait BTreePageKeyReadWrite: Copy + Sized {
+    fn read(f: &mut dyn Read) -> io::Result<Self>;
+    fn write(self, f: &mut dyn Write) -> io::Result<()>;
+}
+
 pub trait BTreeEntryReadWrite: BTreeEntry + Copy + Sized + Default {
     const ENTRY_SIZE: usize;
 
@@ -160,14 +165,13 @@ pub trait BlockBTreeEntryReadWrite: BlockBTreeEntry + Copy + Sized {
 pub trait BTreePageEntryReadWrite: BTreePageEntry
 where
     Self: BTreeEntryReadWrite,
-    <Self as BTreePageEntry>::Key: BlockIdReadWrite,
+    <Self as BTreeEntry>::Key: BTreePageKeyReadWrite,
     <Self as BTreePageEntry>::Block:
         BlockRef<Block: BlockIdReadWrite, Index: ByteIndexReadWrite> + BlockRefReadWrite,
 {
     const ENTRY_SIZE: usize;
 
     fn new(key: Self::Key, block: Self::Block) -> Self;
-    fn extend_key(node: NodeId) -> Self::Key;
 
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         Ok(Self::new(Self::Key::read(f)?, Self::Block::read(f)?))
@@ -180,7 +184,16 @@ where
 }
 
 pub trait BTreePageReadWrite: BTreePage + Sized {
-    fn new(level: u8, entries: &[Self::Entry], trailer: Self::Trailer) -> NdbResult<Self>;
+    fn new(
+        level: u8,
+        max_entries: u8,
+        entry_size: u8,
+        entries: &[Self::Entry],
+        trailer: Self::Trailer,
+    ) -> NdbResult<Self>;
+
+    fn max_entries(&self) -> u8;
+    fn entry_size(&self) -> u8;
 }
 
 pub const UNICODE_BTREE_ENTRIES_SIZE: usize = 488;
@@ -190,31 +203,30 @@ pub trait UnicodeBTreePageReadWrite<Entry>:
 where
     Entry: BTreeEntryReadWrite,
 {
-    const MAX_BTREE_ENTRIES: usize = UNICODE_BTREE_ENTRIES_SIZE / Entry::ENTRY_SIZE;
-
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let mut buffer = [0_u8; 496];
         f.read_exact(&mut buffer)?;
-        let mut cursor = Cursor::new(buffer);
+        let buffer = buffer.as_slice();
 
-        cursor.seek(SeekFrom::Start(UNICODE_BTREE_ENTRIES_SIZE as u64))?;
+        let mut cursor = Cursor::new(&buffer[UNICODE_BTREE_ENTRIES_SIZE..]);
 
         // cEnt
         let entry_count = usize::from(cursor.read_u8()?);
-        if entry_count > Self::MAX_BTREE_ENTRIES {
-            return Err(NdbError::InvalidBTreeEntryCount(entry_count).into());
-        }
 
         // cEntMax
         let max_entries = cursor.read_u8()?;
-        if usize::from(max_entries) != Self::MAX_BTREE_ENTRIES {
-            return Err(NdbError::InvalidBTreeEntryMaxCount(max_entries).into());
-        }
 
         // cbEnt
         let entry_size = cursor.read_u8()?;
-        if usize::from(entry_size) != Entry::ENTRY_SIZE {
+
+        if entry_count > usize::from(max_entries) {
+            return Err(NdbError::InvalidBTreeEntryCount(entry_count).into());
+        }
+        if usize::from(entry_size) < Entry::ENTRY_SIZE {
             return Err(NdbError::InvalidBTreeEntrySize(entry_size).into());
+        }
+        if usize::from(max_entries) > UNICODE_BTREE_ENTRIES_SIZE / usize::from(entry_size) {
+            return Err(NdbError::InvalidBTreeEntryMaxCount(max_entries).into());
         }
 
         // cLevel
@@ -236,45 +248,51 @@ where
             return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
         }
 
-        let buffer = cursor.into_inner();
-        let crc = compute_crc(0, &buffer);
+        let crc = compute_crc(0, buffer);
         if crc != trailer.crc() {
             return Err(NdbError::InvalidPageCrc(crc).into());
         }
 
         // rgentries
-        let mut cursor = Cursor::new(buffer);
         let mut entries = Vec::with_capacity(entry_count);
-        for _ in 0..entry_count {
+        for i in 0..entry_count {
+            let offset = i * usize::from(entry_size);
+            let end = offset + usize::from(entry_size);
+            let mut cursor = &buffer[offset..end];
             entries.push(<Self::Entry as BTreeEntryReadWrite>::read(&mut cursor)?);
         }
 
-        Ok(<Self as BTreePageReadWrite>::new(level, &entries, trailer)?)
+        Ok(<Self as BTreePageReadWrite>::new(
+            level,
+            max_entries,
+            entry_size,
+            &entries,
+            trailer,
+        )?)
     }
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
-        let mut cursor = Cursor::new([0_u8; 496]);
+        let mut buffer = [0_u8; 496];
 
         // rgentries
         let entries = self.entries();
-        for entry in entries.iter().take(Self::MAX_BTREE_ENTRIES) {
+        for (i, entry) in entries.iter().enumerate() {
+            let offset = i * usize::from(self.entry_size());
+            let end = offset + usize::from(self.entry_size());
+            let mut cursor = &mut buffer[offset..end];
             <Self::Entry as BTreeEntryReadWrite>::write(entry, &mut cursor)?;
         }
-        if entries.len() < Self::MAX_BTREE_ENTRIES {
-            let entry = Default::default();
-            for _ in entries.len()..Self::MAX_BTREE_ENTRIES {
-                <Self::Entry as BTreeEntryReadWrite>::write(&entry, &mut cursor)?;
-            }
-        }
+
+        let mut cursor = Cursor::new(&mut buffer[UNICODE_BTREE_ENTRIES_SIZE..]);
 
         // cEnt
         cursor.write_u8(entries.len() as u8)?;
 
         // cEntMax
-        cursor.write_u8(Self::MAX_BTREE_ENTRIES as u8)?;
+        cursor.write_u8(self.max_entries())?;
 
         // cbEnt
-        cursor.write_u8(Entry::ENTRY_SIZE as u8)?;
+        cursor.write_u8(self.entry_size())?;
 
         // cLevel
         cursor.write_u8(self.level())?;
@@ -282,7 +300,7 @@ where
         // dwPadding
         cursor.write_u32::<LittleEndian>(0)?;
 
-        let buffer = cursor.into_inner();
+        cursor.flush()?;
         let crc = compute_crc(0, &buffer);
 
         f.write_all(&buffer)?;
@@ -307,31 +325,30 @@ pub trait AnsiBTreePageReadWrite<Entry>:
 where
     Entry: BTreeEntryReadWrite,
 {
-    const MAX_BTREE_ENTRIES: usize = ANSI_BTREE_ENTRIES_SIZE / Entry::ENTRY_SIZE;
-
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let mut buffer = [0_u8; 500];
         f.read_exact(&mut buffer)?;
-        let mut cursor = Cursor::new(buffer);
+        let buffer = buffer.as_slice();
 
-        cursor.seek(SeekFrom::Start(ANSI_BTREE_ENTRIES_SIZE as u64))?;
+        let mut cursor = Cursor::new(&buffer[ANSI_BTREE_ENTRIES_SIZE..]);
 
         // cEnt
         let entry_count = usize::from(cursor.read_u8()?);
-        if entry_count > Self::MAX_BTREE_ENTRIES {
-            return Err(NdbError::InvalidBTreeEntryCount(entry_count).into());
-        }
 
         // cEntMax
         let max_entries = cursor.read_u8()?;
-        if usize::from(max_entries) != Self::MAX_BTREE_ENTRIES {
-            return Err(NdbError::InvalidBTreeEntryMaxCount(max_entries).into());
-        }
 
         // cbEnt
         let entry_size = cursor.read_u8()?;
-        if usize::from(entry_size) != Entry::ENTRY_SIZE {
+
+        if entry_count > usize::from(max_entries) {
+            return Err(NdbError::InvalidBTreeEntryCount(entry_count).into());
+        }
+        if usize::from(entry_size) < Entry::ENTRY_SIZE {
             return Err(NdbError::InvalidBTreeEntrySize(entry_size).into());
+        }
+        if usize::from(max_entries) > ANSI_BTREE_ENTRIES_SIZE / usize::from(entry_size) {
+            return Err(NdbError::InvalidBTreeEntryMaxCount(max_entries).into());
         }
 
         // cLevel
@@ -347,50 +364,56 @@ where
             return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
         }
 
-        let buffer = cursor.into_inner();
-        let crc = compute_crc(0, &buffer);
+        let crc = compute_crc(0, buffer);
         if crc != trailer.crc() {
             return Err(NdbError::InvalidPageCrc(crc).into());
         }
 
         // rgentries
-        let mut cursor = Cursor::new(buffer);
         let mut entries = Vec::with_capacity(entry_count);
-        for _ in 0..entry_count {
+        for i in 0..entry_count {
+            let offset = i * usize::from(entry_size);
+            let end = offset + usize::from(entry_size);
+            let mut cursor = &buffer[offset..end];
             entries.push(<Self::Entry as BTreeEntryReadWrite>::read(&mut cursor)?);
         }
 
-        Ok(<Self as BTreePageReadWrite>::new(level, &entries, trailer)?)
+        Ok(<Self as BTreePageReadWrite>::new(
+            level,
+            max_entries,
+            entry_size,
+            &entries,
+            trailer,
+        )?)
     }
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
-        let mut cursor = Cursor::new([0_u8; 500]);
+        let mut buffer = [0_u8; 500];
 
         // rgentries
         let entries = self.entries();
-        for entry in entries.iter().take(Self::MAX_BTREE_ENTRIES) {
+        for (i, entry) in entries.iter().enumerate() {
+            let offset = i * usize::from(self.entry_size());
+            let end = offset + usize::from(self.entry_size());
+            let mut cursor = &mut buffer[offset..end];
             <Self::Entry as BTreeEntryReadWrite>::write(entry, &mut cursor)?;
         }
-        if entries.len() < Self::MAX_BTREE_ENTRIES {
-            let entry = Default::default();
-            for _ in entries.len()..Self::MAX_BTREE_ENTRIES {
-                <Self::Entry as BTreeEntryReadWrite>::write(&entry, &mut cursor)?;
-            }
-        }
+
+        let mut cursor = Cursor::new(&mut buffer[ANSI_BTREE_ENTRIES_SIZE..]);
 
         // cEnt
         cursor.write_u8(entries.len() as u8)?;
 
         // cEntMax
-        cursor.write_u8(Self::MAX_BTREE_ENTRIES as u8)?;
+        cursor.write_u8(self.max_entries())?;
 
         // cbEnt
-        cursor.write_u8(Entry::ENTRY_SIZE as u8)?;
+        cursor.write_u8(self.entry_size())?;
 
         // cLevel
         cursor.write_u8(self.level())?;
 
-        let buffer = cursor.into_inner();
+        cursor.flush()?;
         let crc = compute_crc(0, &buffer);
 
         f.write_all(&buffer)?;
@@ -434,7 +457,8 @@ where
         let mut data = vec![0; size as usize];
         f.read_exact(&mut data)?;
 
-        let offset = i64::from(block_size(size) - size - Self::Trailer::SIZE);
+        let offset = size + Self::Trailer::SIZE;
+        let offset = i64::from(block_size(offset) - offset);
         if offset > 0 {
             f.seek(SeekFrom::Current(offset))?;
         }
@@ -489,7 +513,8 @@ where
         f.write_all(&data)?;
 
         let size = data.len() as u16;
-        let offset = i64::from(block_size(size) - size - UnicodeBlockTrailer::SIZE);
+        let offset = size + Self::Trailer::SIZE;
+        let offset = i64::from(block_size(offset) - offset);
         if offset > 0 {
             f.seek(SeekFrom::Current(offset))?;
         }
@@ -524,12 +549,11 @@ where
         trailer: Self::Trailer,
     ) -> NdbResult<Self>;
 
-    fn read<R: Read + Seek>(f: &mut R, size: u16) -> io::Result<Self> {
+    fn read<R: Read + Seek>(f: &mut R, header: Self::Header, size: u16) -> io::Result<Self> {
         let mut data = vec![0; size as usize];
         f.read_exact(&mut data)?;
-        let mut cursor = Cursor::new(data.as_slice());
+        let mut cursor = Cursor::new(&data[Self::Header::HEADER_SIZE as usize..]);
 
-        let header = Self::Header::read(&mut cursor)?;
         let entry_count = header.entry_count();
 
         if entry_count * Self::Entry::ENTRY_SIZE > size - Self::Header::HEADER_SIZE {
@@ -540,8 +564,9 @@ where
             .map(move |_| <Self::Entry as IntermediateTreeEntryReadWrite>::read(&mut cursor))
             .collect::<io::Result<Vec<_>>>()?;
 
-        let offset = Self::Header::HEADER_SIZE + entry_count * Self::Entry::ENTRY_SIZE;
-        let offset = i64::from(block_size(size + Self::Trailer::SIZE) - offset);
+        let size = Self::Header::HEADER_SIZE + entry_count * Self::Entry::ENTRY_SIZE;
+        let offset = size + Self::Trailer::SIZE;
+        let offset = i64::from(block_size(offset) - offset);
         match offset.cmp(&0) {
             Ordering::Greater => {
                 f.seek(SeekFrom::Current(offset))?;

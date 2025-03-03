@@ -1,7 +1,10 @@
 //! [NID (Node ID)](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/18d7644e-cb33-4e11-95c0-34d8a84fbff6)
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{self, Read, Write};
+use std::{
+    fmt::Debug,
+    io::{self, Read, Write},
+};
 
 use super::{read_write::NodeIdReadWrite, *};
 
@@ -86,7 +89,7 @@ impl TryFrom<u8> for NodeIdType {
 
 pub const MAX_NODE_INDEX: u32 = 1_u32.rotate_right(5) - 1;
 
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default)]
 pub struct NodeId(u32);
 
 impl NodeId {
@@ -104,7 +107,7 @@ impl NodeId {
         Ok(Self(shifted_index | (u32::from(id_type))))
     }
 
-    pub fn id_type(&self) -> Result<NodeIdType, NdbError> {
+    pub fn id_type(&self) -> NdbResult<NodeIdType> {
         let nid_type = self.0 & 0x1F;
         NodeIdType::try_from(nid_type as u8)
     }
@@ -129,6 +132,16 @@ impl NodeIdReadWrite for NodeId {
     }
 }
 
+impl Debug for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Ok(id_type) = self.id_type() else {
+            return write!(f, "NodeId {{ invalid: 0x{:08X} }}", u32::from(*self));
+        };
+
+        write!(f, "NodeId {{ {:?}: 0x{:X} }}", id_type, self.index())
+    }
+}
+
 impl From<u32> for NodeId {
     fn from(value: u32) -> Self {
         Self(value)
@@ -140,6 +153,62 @@ impl From<NodeId> for u32 {
         value.0
     }
 }
+
+/// [`NID_MESSAGE_STORE`](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/0510ece4-6853-4bef-8cc8-8df3468e3ff1):
+/// Message store node (section [2.4.3](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/aa0539bd-e7bf-4cec-8bde-0b87c2a86baf)).
+pub const NID_MESSAGE_STORE: NodeId = NodeId(0x21);
+
+/// [`NID_NAME_TO_ID_MAP`](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/0510ece4-6853-4bef-8cc8-8df3468e3ff1):
+/// Named Properties Map (section [2.4.7](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/e17e195d-0454-4b9b-b398-c9127a26a678)).
+pub const NID_NAME_TO_ID_MAP: NodeId = NodeId(0x61);
+
+/// [`NID_NORMAL_FOLDER_TEMPLATE`](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/0510ece4-6853-4bef-8cc8-8df3468e3ff1):
+/// Special template node for an empty Folder object.
+pub const NID_NORMAL_FOLDER_TEMPLATE: NodeId = NodeId(0xA1);
+
+/// [`NID_SEARCH_FOLDER_TEMPLATE`](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/0510ece4-6853-4bef-8cc8-8df3468e3ff1):
+/// Special template node for an empty search Folder object.
+pub const NID_SEARCH_FOLDER_TEMPLATE: NodeId = NodeId(0xC1);
+
+/// [`NID_ROOT_FOLDER`](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/0510ece4-6853-4bef-8cc8-8df3468e3ff1):
+/// Root Mailbox Folder object of PST.
+pub const NID_ROOT_FOLDER: NodeId = NodeId(0x122);
+
+/// [`NID_SEARCH_MANAGEMENT_QUEUE`](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/0510ece4-6853-4bef-8cc8-8df3468e3ff1):
+/// Queue of Pending Search-related updates.
+pub const NID_SEARCH_MANAGEMENT_QUEUE: NodeId = NodeId(0x1E1);
+
+/// [`NID_SEARCH_ACTIVITY_LIST`](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/0510ece4-6853-4bef-8cc8-8df3468e3ff1):
+/// Folder object NIDs with active Search activity.
+pub const NID_SEARCH_ACTIVITY_LIST: NodeId = NodeId(0x201);
+
+/// [`NID_RESERVED1`](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/0510ece4-6853-4bef-8cc8-8df3468e3ff1):
+/// Reserved.
+pub const NID_RESERVED1: NodeId = NodeId(0x241);
+
+/// [`NID_SEARCH_DOMAIN_OBJECT`](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/0510ece4-6853-4bef-8cc8-8df3468e3ff1):
+/// Global list of all Folder objects that are referenced by any Folder object's Search Criteria.
+pub const NID_SEARCH_DOMAIN_OBJECT: NodeId = NodeId(0x261);
+
+/// [`NID_SEARCH_GATHERER_QUEUE`](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/0510ece4-6853-4bef-8cc8-8df3468e3ff1):
+/// Search Gatherer Queue (section [2.4.8.5.1](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/984f26d3-6603-4229-974f-4373e5a95c6a)).
+pub const NID_SEARCH_GATHERER_QUEUE: NodeId = NodeId(0x281);
+
+/// [`NID_SEARCH_GATHERER_DESCRIPTOR`](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/0510ece4-6853-4bef-8cc8-8df3468e3ff1):
+/// Search Gatherer Descriptor (section [2.4.8.5.2](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/45ac5a7b-6698-4dbd-8a34-e499b79199b9)).
+pub const NID_SEARCH_GATHERER_DESCRIPTOR: NodeId = NodeId(0x2A1);
+
+/// [`NID_RESERVED2`](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/0510ece4-6853-4bef-8cc8-8df3468e3ff1):
+/// Reserved.
+pub const NID_RESERVED2: NodeId = NodeId(0x2E1);
+
+/// [`NID_RESERVED3`](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/0510ece4-6853-4bef-8cc8-8df3468e3ff1):
+/// Reserved.
+pub const NID_RESERVED3: NodeId = NodeId(0x301);
+
+/// [`NID_SEARCH_GATHERER_FOLDER_QUEUE`](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/0510ece4-6853-4bef-8cc8-8df3468e3ff1):
+/// Search Gatherer Folder Queue (section [2.4.8.5.3](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/5dd87c45-5f2d-4945-b7e3-2612bd1a94d3)).
+pub const NID_SEARCH_GATHERER_FOLDER_QUEUE: NodeId = NodeId(0x321);
 
 #[cfg(test)]
 mod tests {
