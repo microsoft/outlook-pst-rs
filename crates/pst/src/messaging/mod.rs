@@ -3,6 +3,7 @@
 use std::io;
 use thiserror::Error;
 
+pub mod folder;
 pub mod store;
 
 pub(crate) mod read_write;
@@ -30,15 +31,35 @@ pub enum MessagingError {
     #[error("Missing PidTagIpmSubTreeEntryId on store")]
     StoreIpmSubTreeEntryIdNotFound,
     #[error("Invalid PidTagIpmSubTreeEntryId on store: {0:?}")]
-    StoreInvalidIpmSubTreeEntryId(crate::ltp::prop_type::PropertyType),
+    InvalidStoreIpmSubTreeEntryId(crate::ltp::prop_type::PropertyType),
     #[error("Missing PidTagIpmWastebasketEntryId on store")]
     StoreIpmWastebasketEntryIdNotFound,
     #[error("Invalid PidTagIpmWastebasketEntryId on store: {0:?}")]
-    StoreInvalidIpmWastebasketEntryId(crate::ltp::prop_type::PropertyType),
+    InvalidStoreIpmWastebasketEntryId(crate::ltp::prop_type::PropertyType),
     #[error("Missing PidTagFinderEntryId on store")]
     StoreFinderEntryIdNotFound,
     #[error("Invalid PidTagFinderEntryId on store: {0:?}")]
-    StoreInvalidFinderEntryId(crate::ltp::prop_type::PropertyType),
+    InvalidStoreFinderEntryId(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagDisplayName on folder")]
+    FolderDisplayNameNotFound,
+    #[error("Invalid PidTagDisplayName on folder: {0:?}")]
+    InvalidFolderDisplayName(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagContentCount on folder")]
+    FolderContentCountNotFound,
+    #[error("Invalid PidTagContentCount on folder: {0:?}")]
+    InvalidFolderContentCount(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagContentUnreadCount on folder")]
+    FolderUnreadCountNotFound,
+    #[error("Invalid PidTagContentUnreadCount on folder: {0:?}")]
+    InvalidFolderUnreadCount(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagSubfolders on folder")]
+    FolderHasSubfoldersNotFound,
+    #[error("Invalid PidTagSubfolders on folder: {0:?}")]
+    InvalidFolderHasSubfolders(crate::ltp::prop_type::PropertyType),
+    #[error("Invalid folder EntryID NID_TYPE: {0:?}")]
+    InvalidFolderEntryIdType(crate::ndb::node_id::NodeIdType),
+    #[error("EntryID in wrong store")]
+    EntryIdWrongStore,
 }
 
 impl From<MessagingError> for io::Error {

@@ -13,12 +13,13 @@ use crate::{
         heap::{AnsiHeapNode, UnicodeHeapNode},
         prop_context::{AnsiPropertyContext, PropertyValue, UnicodePropertyContext},
         prop_type::PropertyType,
+        table_context::{AnsiTableContext, TableRowColumnValue, UnicodeTableContext},
         tree::{AnsiHeapTree, UnicodeHeapTree},
     },
     ndb::{
         block::{AnsiDataTree, UnicodeDataTree},
         header::Header,
-        node_id::{NodeId, NID_MESSAGE_STORE},
+        node_id::{NodeId, NodeIdType, NID_MESSAGE_STORE, NID_ROOT_FOLDER},
         page::{
             AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, RootBTree, UnicodeBlockBTree,
             UnicodeNodeBTree,
@@ -140,6 +141,7 @@ impl From<&EntryId> for NodeId {
     }
 }
 
+#[derive(Default, Debug)]
 pub struct StoreProperties {
     properties: BTreeMap<u16, PropertyValue>,
 }
@@ -191,7 +193,7 @@ impl StoreProperties {
         match entry_id {
             PropertyValue::Binary(value) => EntryId::read(&mut value.buffer()),
             invalid => Err(
-                MessagingError::StoreInvalidIpmSubTreeEntryId(PropertyType::from(invalid)).into(),
+                MessagingError::InvalidStoreIpmSubTreeEntryId(PropertyType::from(invalid)).into(),
             ),
         }
     }
@@ -205,7 +207,7 @@ impl StoreProperties {
         match entry_id {
             PropertyValue::Binary(value) => EntryId::read(&mut value.buffer()),
             invalid => Err(
-                MessagingError::StoreInvalidIpmWastebasketEntryId(PropertyType::from(invalid))
+                MessagingError::InvalidStoreIpmWastebasketEntryId(PropertyType::from(invalid))
                     .into(),
             ),
         }
@@ -220,7 +222,7 @@ impl StoreProperties {
         match entry_id {
             PropertyValue::Binary(value) => EntryId::read(&mut value.buffer()),
             invalid => {
-                Err(MessagingError::StoreInvalidFinderEntryId(PropertyType::from(invalid)).into())
+                Err(MessagingError::InvalidStoreFinderEntryId(PropertyType::from(invalid)).into())
             }
         }
     }
@@ -228,6 +230,8 @@ impl StoreProperties {
 
 pub struct UnicodeStore<'a> {
     pst: &'a UnicodePstFile,
+    node_btree: UnicodeNodeBTree,
+    block_btree: UnicodeBlockBTree,
     properties: StoreProperties,
 }
 
@@ -236,11 +240,19 @@ impl<'a> UnicodeStore<'a> {
         self.pst
     }
 
+    pub fn node_btree(&self) -> &UnicodeNodeBTree {
+        &self.node_btree
+    }
+
+    pub fn block_btree(&self) -> &UnicodeBlockBTree {
+        &self.block_btree
+    }
+
     pub fn read(pst: &'a UnicodePstFile) -> io::Result<Self> {
         let header = pst.header();
         let root = header.root();
 
-        let properties = {
+        let (node_btree, block_btree, properties) = {
             let mut file = pst
                 .file()
                 .lock()
@@ -259,7 +271,7 @@ impl<'a> UnicodeStore<'a> {
 
             let tree = UnicodeHeapTree::new(heap, header.user_root());
             let prop_context = UnicodePropertyContext::new(node, tree);
-            prop_context
+            let properties = prop_context
                 .properties(file, encoding, &block_btree)?
                 .into_iter()
                 .map(|(prop_id, record)| {
@@ -267,11 +279,18 @@ impl<'a> UnicodeStore<'a> {
                         .read_property(file, encoding, &block_btree, record)
                         .map(|value| (prop_id, value))
                 })
-                .collect::<io::Result<BTreeMap<_, _>>>()
-        }?;
-        let properties = StoreProperties { properties };
+                .collect::<io::Result<BTreeMap<_, _>>>()?;
+            let properties = StoreProperties { properties };
 
-        Ok(Self { pst, properties })
+            (node_btree, block_btree, properties)
+        };
+
+        Ok(Self {
+            pst,
+            node_btree,
+            block_btree,
+            properties,
+        })
     }
 
     pub fn properties(&self) -> &StoreProperties {
@@ -287,10 +306,54 @@ impl<'a> UnicodeStore<'a> {
         let store_record_key = self.properties.record_key()?;
         Ok(store_record_key == entry_id.record_key)
     }
+
+    pub fn root_hierarchy_table(&self) -> io::Result<UnicodeTableContext> {
+        let header = self.pst.header();
+        let root = header.root();
+
+        let hierarchy_table = {
+            let mut file = self
+                .pst
+                .file()
+                .lock()
+                .map_err(|_| MessagingError::FailedToLockFile)?;
+            let file = &mut *file;
+
+            let encoding = header.crypt_method();
+            let node_btree = UnicodeNodeBTree::read(file, *root.node_btree())?;
+            let block_btree = UnicodeBlockBTree::read(file, *root.block_btree())?;
+
+            let node_id = NodeId::new(NodeIdType::HierarchyTable, NID_ROOT_FOLDER.index())?;
+            let node = node_btree.find_entry(file, u64::from(u32::from(node_id)))?;
+            UnicodeTableContext::read(file, encoding, &block_btree, node)?
+        };
+        Ok(hierarchy_table)
+    }
+
+    pub fn read_table_column(
+        &self,
+        table: &UnicodeTableContext,
+        value: &TableRowColumnValue,
+        prop_type: PropertyType,
+    ) -> io::Result<PropertyValue> {
+        let mut file = self
+            .pst
+            .file()
+            .lock()
+            .map_err(|_| MessagingError::FailedToLockFile)?;
+        let file = &mut *file;
+
+        let encoding = self.pst.header().crypt_method();
+        let block_btree = self.block_btree();
+
+        UnicodeTableContext::read_column(table, file, encoding, block_btree, value, prop_type)
+    }
 }
 
 pub struct AnsiStore<'a> {
     pst: &'a AnsiPstFile,
+    node_btree: AnsiNodeBTree,
+    block_btree: AnsiBlockBTree,
     properties: StoreProperties,
 }
 
@@ -299,11 +362,19 @@ impl<'a> AnsiStore<'a> {
         self.pst
     }
 
+    pub fn node_btree(&self) -> &AnsiNodeBTree {
+        &self.node_btree
+    }
+
+    pub fn block_btree(&self) -> &AnsiBlockBTree {
+        &self.block_btree
+    }
+
     pub fn read(pst: &'a AnsiPstFile) -> io::Result<Self> {
         let header = pst.header();
         let root = header.root();
 
-        let properties = {
+        let (node_btree, block_btree, properties) = {
             let mut file = pst
                 .file()
                 .lock()
@@ -322,7 +393,7 @@ impl<'a> AnsiStore<'a> {
 
             let tree = AnsiHeapTree::new(heap, header.user_root());
             let prop_context = AnsiPropertyContext::new(node, tree);
-            prop_context
+            let properties = prop_context
                 .properties(file, encoding, &block_btree)?
                 .into_iter()
                 .map(|(prop_id, record)| {
@@ -330,11 +401,18 @@ impl<'a> AnsiStore<'a> {
                         .read_property(file, encoding, &block_btree, record)
                         .map(|value| (prop_id, value))
                 })
-                .collect::<io::Result<BTreeMap<_, _>>>()
-        }?;
-        let properties = StoreProperties { properties };
+                .collect::<io::Result<BTreeMap<_, _>>>()?;
+            let properties = StoreProperties { properties };
 
-        Ok(Self { pst, properties })
+            (node_btree, block_btree, properties)
+        };
+
+        Ok(Self {
+            pst,
+            node_btree,
+            block_btree,
+            properties,
+        })
     }
 
     pub fn properties(&self) -> &StoreProperties {
@@ -349,5 +427,47 @@ impl<'a> AnsiStore<'a> {
     pub fn matches_record_key(&self, entry_id: &EntryId) -> io::Result<bool> {
         let store_record_key = self.properties.record_key()?;
         Ok(store_record_key == entry_id.record_key)
+    }
+
+    pub fn root_hierarchy_table(&self) -> io::Result<AnsiTableContext> {
+        let header = self.pst.header();
+        let root = header.root();
+
+        let hierarchy_table = {
+            let mut file = self
+                .pst
+                .file()
+                .lock()
+                .map_err(|_| MessagingError::FailedToLockFile)?;
+            let file = &mut *file;
+
+            let encoding = header.crypt_method();
+            let node_btree = AnsiNodeBTree::read(file, *root.node_btree())?;
+            let block_btree = AnsiBlockBTree::read(file, *root.block_btree())?;
+
+            let node_id = NodeId::new(NodeIdType::HierarchyTable, NID_ROOT_FOLDER.index())?;
+            let node = node_btree.find_entry(file, u32::from(node_id))?;
+            AnsiTableContext::read(file, encoding, &block_btree, node)?
+        };
+        Ok(hierarchy_table)
+    }
+
+    pub fn read_table_column(
+        &self,
+        table: &AnsiTableContext,
+        value: &TableRowColumnValue,
+        prop_type: PropertyType,
+    ) -> io::Result<PropertyValue> {
+        let mut file = self
+            .pst
+            .file()
+            .lock()
+            .map_err(|_| MessagingError::FailedToLockFile)?;
+        let file = &mut *file;
+
+        let encoding = self.pst.header().crypt_method();
+        let block_btree = self.block_btree();
+
+        AnsiTableContext::read_column(table, file, encoding, block_btree, value, prop_type)
     }
 }
