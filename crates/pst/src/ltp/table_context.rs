@@ -22,6 +22,17 @@ use crate::ndb::{
 pub const LTP_ROW_ID_PROP_ID: u16 = 0x67F2;
 pub const LTP_ROW_VERSION_PROP_ID: u16 = 0x67F3;
 
+pub const fn existence_bitmap_size(column_count: usize) -> usize {
+    column_count / 8 + if column_count % 8 == 0 { 0 } else { 1 }
+}
+
+pub const fn check_existence_bitmap(column: usize, existence_bitmap: &[u8]) -> LtpResult<bool> {
+    if column >= existence_bitmap.len() * 8 {
+        return Err(LtpError::InvalidTableContextColumnCount(column));
+    }
+    Ok(existence_bitmap[column / 8] & (1_u8 << (7 - (column % 8))) != 0)
+}
+
 /// [TCINFO](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/45b3a0c5-d6d6-4e02-aebf-13766ff693f0)
 #[derive(Clone, Default, Debug)]
 pub struct TableContextInfo {
@@ -62,48 +73,41 @@ impl TableContextInfo {
         }
 
         if end_existence_bitmap < end_1byte_values
-            || (end_existence_bitmap - end_1byte_values) as usize / 8 != columns.len() / 8
+            || (end_existence_bitmap - end_1byte_values) as usize
+                != existence_bitmap_size(columns.len())
         {
             return Err(LtpError::InvalidTableContextBitmaskOffset(
                 end_existence_bitmap,
             ));
         }
 
-        let row_id_column = columns
-            .first()
-            .ok_or(LtpError::TableContextRowIdColumnNotFound)?;
-        match (
-            row_id_column.prop_type(),
-            row_id_column.prop_id(),
-            row_id_column.offset(),
-            row_id_column.size(),
-            row_id_column.existence_bitmap_index(),
-        ) {
-            (PropertyType::Integer32, LTP_ROW_ID_PROP_ID, 0, 4, 0) => {}
-            (prop_type, prop_id, ..) => {
-                return Err(LtpError::InvalidTableContextRowIdColumn(prop_id, prop_type));
-            }
-        }
-
-        let row_ver_column = columns
-            .get(1)
-            .ok_or(LtpError::TableContextRowVersionColumnNotFound)?;
-        match (
-            row_ver_column.prop_type(),
-            row_ver_column.prop_id(),
-            row_ver_column.offset(),
-            row_ver_column.size(),
-            row_ver_column.existence_bitmap_index(),
-        ) {
-            (PropertyType::Integer32, LTP_ROW_VERSION_PROP_ID, 4, 4, 1) => {}
-            (prop_type, prop_id, ..) => {
-                return Err(LtpError::InvalidTableContextRowVersionColumn(
-                    prop_id, prop_type,
-                ));
-            }
-        }
-
         for column in columns.iter() {
+            match (column.prop_type(), column.prop_id()) {
+                (PropertyType::Integer32, LTP_ROW_ID_PROP_ID) => {
+                    match (column.offset(), column.existence_bitmap_index()) {
+                        (0, 0) => {}
+                        _ => {
+                            return Err(LtpError::InvalidTableContextRowIdColumn(
+                                column.prop_id(),
+                                column.prop_type(),
+                            ));
+                        }
+                    }
+                }
+                (PropertyType::Integer32, LTP_ROW_VERSION_PROP_ID) => {
+                    match (column.offset(), column.existence_bitmap_index()) {
+                        (4, 1) => {}
+                        _ => {
+                            return Err(LtpError::InvalidTableContextRowIdColumn(
+                                column.prop_id(),
+                                column.prop_type(),
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+
             match column.prop_type() {
                 PropertyType::Integer16
                 | PropertyType::Integer32
@@ -573,9 +577,7 @@ impl TableRowData {
             .iter()
             .map(|column| {
                 let existence_bit = column.existence_bitmap_index() as usize;
-                if self.existence_bitmap[existence_bit / 8] & (1_u8 << (7 - (existence_bit % 8)))
-                    == 0
-                {
+                if !check_existence_bitmap(existence_bit, &self.existence_bitmap)? {
                     return Ok(None);
                 }
 
@@ -767,9 +769,7 @@ impl TableRowReadWrite for TableRowData {
         f.read_exact(align_1byte.as_mut_slice())?;
 
         // rgbCEB
-        let column_count = context.columns().len();
-        let existence_bitmap_size = column_count / 8 + if column_count % 8 == 0 { 0 } else { 1 };
-        let mut existence_bitmap = vec![0; existence_bitmap_size];
+        let mut existence_bitmap = vec![0; existence_bitmap_size(context.columns().len())];
         f.read_exact(existence_bitmap.as_mut_slice())?;
 
         Ok(Self::new(

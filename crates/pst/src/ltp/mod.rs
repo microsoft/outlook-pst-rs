@@ -43,8 +43,6 @@ pub enum LtpError {
     InvalidHeapTreeDataSize(u8),
     #[error("Missing HID hidBlockIndex: {0}")]
     HeapBlockIndexNotFound(u16),
-    #[error("Invalid HID hidIndex: {0}")]
-    InvalidHeapAllocIndex(u16),
     #[error("Missing HID hidIndex: {0}")]
     HeapAllocIndexNotFound(u16),
     #[error("Invalid PC BTH Record wPropType: 0x{0:04X}")]
