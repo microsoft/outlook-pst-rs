@@ -48,9 +48,11 @@ fn main() -> anyhow::Result<()> {
                 );
 
                 let Some(value) = value else {
-                    println!(" Value: None");
+                    println!("  Value: None");
                     continue;
                 };
+
+                println!("  Record: {value:?}");
 
                 let value = hierarchy_table.read_column(
                     file,
@@ -59,7 +61,7 @@ fn main() -> anyhow::Result<()> {
                     &value,
                     column.prop_type(),
                 )?;
-                println!(" Value: {:?}", value);
+                println!("  Value: {:?}", value);
             }
         }
     }
