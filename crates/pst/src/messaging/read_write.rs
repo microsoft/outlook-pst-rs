@@ -6,3 +6,8 @@ use std::{
 };
 
 use super::{store::*, *};
+
+pub trait StoreReadWrite: Sized {
+    fn read(f: &mut dyn Read) -> io::Result<Self>;
+    fn write(&self, f: &mut dyn Write) -> io::Result<()>;
+}

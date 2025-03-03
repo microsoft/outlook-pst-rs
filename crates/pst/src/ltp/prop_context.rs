@@ -4,7 +4,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use core::mem;
 use std::{
     collections::BTreeMap,
-    fmt::Debug,
+    fmt::{Debug, Display},
     io::{self, Cursor, Read, Seek, Write},
 };
 
@@ -205,9 +205,16 @@ impl String8Value {
     }
 }
 
-impl Debug for String8Value {
+impl Display for String8Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let value = String::from_utf8_lossy(&self.buffer);
+        write!(f, "{value}")
+    }
+}
+
+impl Debug for String8Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = self.to_string();
         write!(f, "String8Value {{ {value:?} }}")
     }
 }
@@ -223,9 +230,16 @@ impl UnicodeValue {
     }
 }
 
-impl Debug for UnicodeValue {
+impl Display for UnicodeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let value = String::from_utf16_lossy(&self.buffer);
+        write!(f, "{value}")
+    }
+}
+
+impl Debug for UnicodeValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = self.to_string();
         write!(f, "UnicodeValue {{ {value:?} }}")
     }
 }

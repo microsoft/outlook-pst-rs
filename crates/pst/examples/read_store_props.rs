@@ -9,12 +9,23 @@ fn main() -> anyhow::Result<()> {
     let store = UnicodeStore::read(&pst).unwrap();
     let properties = store.properties();
 
-    for (prop_id, value) in properties {
+    println!("Display Name: {}", properties.display_name().unwrap());
+    println!(
+        "IPM Subtree: {:?}",
+        properties.ipm_sub_tree_entry_id().unwrap()
+    );
+    println!(
+        "Deleted Items: {:?}",
+        properties.ipm_wastebasket_entry_id().unwrap()
+    );
+    println!("Finder: {:?}", properties.finder_entry_id().unwrap());
+
+    for (prop_id, value) in properties.iter() {
         println!(
-            "Property ID: 0x{prop_id:04X}, Type: {:?}",
+            " Property ID: 0x{prop_id:04X}, Type: {:?}",
             PropertyType::from(value)
         );
-        println!(" Value: {:?}", value);
+        println!("  Value: {:?}", value);
     }
 
     Ok(())
