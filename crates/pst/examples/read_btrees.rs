@@ -23,7 +23,7 @@ mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    let pst = PstFile::read(&args.file).unwrap();
+    let pst = UnicodePstFile::read(&args.file).unwrap();
     let header = pst.header();
     let root = header.root();
 

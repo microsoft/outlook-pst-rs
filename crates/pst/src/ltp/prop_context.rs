@@ -920,6 +920,16 @@ impl UnicodePropertyContext {
         encoding: NdbCryptMethod,
         block_tree: &UnicodeBlockBTree,
     ) -> io::Result<BTreeMap<PropertyTreeRecordKey, PropertyTreeRecordValue>> {
+        let header = self.tree.header(f, encoding, block_tree)?;
+        let key_size = header.key_size();
+        if key_size != 2 {
+            return Err(LtpError::InvalidPropertyTreeKeySize(key_size).into());
+        }
+        let entry_size = header.entry_size();
+        if entry_size != 6 {
+            return Err(LtpError::InvalidPropertyTreeEntrySize(entry_size).into());
+        }
+
         Ok(self
             .tree
             .entries(f, encoding, block_tree)?

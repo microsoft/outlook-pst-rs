@@ -57,6 +57,10 @@ pub enum LtpError {
     PropertySubNodeValueNotFound(u32),
     #[error("Invalid small PC value property type: {0:?}")]
     InvalidSmallPropertyType(prop_type::PropertyType),
+    #[error("Invalid PC property tree key size: 0x{0:X}")]
+    InvalidPropertyTreeKeySize(u8),
+    #[error("Invalid PC property tree entry size: 0x{0:X}")]
+    InvalidPropertyTreeEntrySize(u8),
     #[error("Invalid TCINFO bType: {0:?}")]
     InvalidTableContextHeapTreeNodeType(heap::HeapNodeType),
     #[error("Invalid TCOLDESC count: 0x{0:X}")]
