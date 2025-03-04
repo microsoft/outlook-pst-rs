@@ -169,6 +169,16 @@ impl StoreProperties {
         }
     }
 
+    pub fn make_entry_id(&self, node_id: NodeId) -> io::Result<EntryId> {
+        let record_key = self.record_key()?;
+        Ok(EntryId::new(record_key, node_id))
+    }
+
+    pub fn matches_record_key(&self, entry_id: &EntryId) -> io::Result<bool> {
+        let store_record_key = self.record_key()?;
+        Ok(store_record_key == entry_id.record_key)
+    }
+
     pub fn display_name(&self) -> io::Result<String> {
         let display_name = self
             .properties
@@ -297,16 +307,6 @@ impl<'a> UnicodeStore<'a> {
         &self.properties
     }
 
-    pub fn make_entry_id(&self, node_id: NodeId) -> io::Result<EntryId> {
-        let record_key = self.properties.record_key()?;
-        Ok(EntryId::new(record_key, node_id))
-    }
-
-    pub fn matches_record_key(&self, entry_id: &EntryId) -> io::Result<bool> {
-        let store_record_key = self.properties.record_key()?;
-        Ok(store_record_key == entry_id.record_key)
-    }
-
     pub fn root_hierarchy_table(&self) -> io::Result<UnicodeTableContext> {
         let header = self.pst.header();
         let root = header.root();
@@ -346,7 +346,7 @@ impl<'a> UnicodeStore<'a> {
         let encoding = self.pst.header().crypt_method();
         let block_btree = self.block_btree();
 
-        UnicodeTableContext::read_column(table, file, encoding, block_btree, value, prop_type)
+        table.read_column(file, encoding, block_btree, value, prop_type)
     }
 }
 
@@ -419,16 +419,6 @@ impl<'a> AnsiStore<'a> {
         &self.properties
     }
 
-    pub fn make_entry_id(&self, node_id: NodeId) -> io::Result<EntryId> {
-        let record_key = self.properties.record_key()?;
-        Ok(EntryId::new(record_key, node_id))
-    }
-
-    pub fn matches_record_key(&self, entry_id: &EntryId) -> io::Result<bool> {
-        let store_record_key = self.properties.record_key()?;
-        Ok(store_record_key == entry_id.record_key)
-    }
-
     pub fn root_hierarchy_table(&self) -> io::Result<AnsiTableContext> {
         let header = self.pst.header();
         let root = header.root();
@@ -468,6 +458,6 @@ impl<'a> AnsiStore<'a> {
         let encoding = self.pst.header().crypt_method();
         let block_btree = self.block_btree();
 
-        AnsiTableContext::read_column(table, file, encoding, block_btree, value, prop_type)
+        table.read_column(file, encoding, block_btree, value, prop_type)
     }
 }

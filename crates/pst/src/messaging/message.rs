@@ -160,7 +160,7 @@ impl<'a> UnicodeMessage<'a> {
                 return Err(MessagingError::InvalidMessageEntryIdType(node_id_type).into());
             }
         }
-        if !store.matches_record_key(entry_id)? {
+        if !store.properties().matches_record_key(entry_id)? {
             return Err(MessagingError::EntryIdWrongStore.into());
         }
 
@@ -307,7 +307,7 @@ impl<'a> AnsiMessage<'a> {
                 return Err(MessagingError::InvalidMessageEntryIdType(node_id_type).into());
             }
         }
-        if !store.matches_record_key(entry_id)? {
+        if !store.properties().matches_record_key(entry_id)? {
             return Err(MessagingError::EntryIdWrongStore.into());
         }
 
