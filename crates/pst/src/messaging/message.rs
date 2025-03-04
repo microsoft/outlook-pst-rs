@@ -8,16 +8,19 @@ use crate::{
         heap::{AnsiHeapNode, UnicodeHeapNode},
         prop_context::{AnsiPropertyContext, PropertyValue, UnicodePropertyContext},
         prop_type::PropertyType,
+        table_context::{AnsiTableContext, UnicodeTableContext},
         tree::{AnsiHeapTree, UnicodeHeapTree},
     },
     ndb::{
-        block::{AnsiDataTree, AnsiSubNodeTree, UnicodeDataTree, UnicodeSubNodeTree},
-        block_id::{AnsiBlockId, UnicodeBlockId},
+        block::{
+            AnsiDataTree, AnsiLeafSubNodeTreeEntry, AnsiSubNodeTree, UnicodeDataTree,
+            UnicodeLeafSubNodeTreeEntry, UnicodeSubNodeTree,
+        },
         header::Header,
         node_id::{NodeId, NodeIdType},
         page::{
-            AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, RootBTree, UnicodeBlockBTree,
-            UnicodeNodeBTree,
+            AnsiBlockBTree, AnsiNodeBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, RootBTree,
+            UnicodeBlockBTree, UnicodeNodeBTree, UnicodeNodeBTreeEntry,
         },
         root::Root,
     },
@@ -132,13 +135,15 @@ impl MessageProperties {
     }
 }
 
-pub type UnicodeSubNodeMap = BTreeMap<NodeId, UnicodeBlockId>;
-pub type AnsiSubNodeMap = BTreeMap<NodeId, AnsiBlockId>;
+pub type UnicodeMessageSubNodes = BTreeMap<NodeId, UnicodeLeafSubNodeTreeEntry>;
+pub type AnsiMessageSubNodes = BTreeMap<NodeId, AnsiLeafSubNodeTreeEntry>;
 
 pub struct UnicodeMessage<'a> {
     store: &'a UnicodeStore<'a>,
     properties: MessageProperties,
-    sub_nodes: UnicodeSubNodeMap,
+    sub_nodes: UnicodeMessageSubNodes,
+    recipient_table: UnicodeTableContext,
+    attachment_table: Option<UnicodeTableContext>,
 }
 
 impl<'a> UnicodeMessage<'a> {
@@ -163,7 +168,7 @@ impl<'a> UnicodeMessage<'a> {
         let header = pst.header();
         let root = header.root();
 
-        let (properties, sub_nodes) = {
+        let (properties, sub_nodes, recipient_table, attachment_table) = {
             let mut file = pst
                 .file()
                 .lock()
@@ -199,18 +204,67 @@ impl<'a> UnicodeMessage<'a> {
 
             let block = block_btree.find_entry(file, u64::from(sub_node))?;
             let sub_nodes = UnicodeSubNodeTree::read(file, &block)?;
-            let sub_nodes = sub_nodes
+            let sub_nodes: UnicodeMessageSubNodes = sub_nodes
                 .entries(file, &block_btree)?
-                .map(|entry| (entry.node(), entry.block()))
+                .map(|entry| (entry.node(), entry))
                 .collect();
 
-            (properties, sub_nodes)
+            let mut recipient_table_nodes = sub_nodes.iter().filter_map(|(node_id, entry)| {
+                node_id.id_type().ok().and_then(|id_type| {
+                    if id_type == NodeIdType::RecipientTable {
+                        Some(UnicodeNodeBTreeEntry::new(
+                            entry.node(),
+                            entry.block(),
+                            entry.sub_node(),
+                            None,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+            });
+            let recipient_table = match (recipient_table_nodes.next(), recipient_table_nodes.next())
+            {
+                (None, None) => Err(MessagingError::MessageRecipientTableNotFound.into()),
+                (Some(node), None) => UnicodeTableContext::read(file, encoding, &block_btree, node),
+                _ => Err(MessagingError::MultipleMessageRecipientTables.into()),
+            }?;
+
+            let mut attachment_table_nodes = sub_nodes.iter().filter_map(|(node_id, entry)| {
+                node_id.id_type().ok().and_then(|id_type| {
+                    if id_type == NodeIdType::AttachmentTable {
+                        Some(UnicodeNodeBTreeEntry::new(
+                            entry.node(),
+                            entry.block(),
+                            entry.sub_node(),
+                            None,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+            });
+            let attachment_table =
+                match (attachment_table_nodes.next(), attachment_table_nodes.next()) {
+                    (None, None) => None,
+                    (Some(node), None) => Some(UnicodeTableContext::read(
+                        file,
+                        encoding,
+                        &block_btree,
+                        node,
+                    )?),
+                    _ => return Err(MessagingError::MultipleMessageAttachmentTables.into()),
+                };
+
+            (properties, sub_nodes, recipient_table, attachment_table)
         };
 
         Ok(Self {
             store,
             properties,
             sub_nodes,
+            recipient_table,
+            attachment_table,
         })
     }
 
@@ -218,15 +272,25 @@ impl<'a> UnicodeMessage<'a> {
         &self.properties
     }
 
-    pub fn sub_nodes(&self) -> &UnicodeSubNodeMap {
+    pub fn sub_nodes(&self) -> &UnicodeMessageSubNodes {
         &self.sub_nodes
+    }
+
+    pub fn recipient_table(&self) -> &UnicodeTableContext {
+        &self.recipient_table
+    }
+
+    pub fn attachment_table(&self) -> Option<&UnicodeTableContext> {
+        self.attachment_table.as_ref()
     }
 }
 
 pub struct AnsiMessage<'a> {
     store: &'a AnsiStore<'a>,
     properties: MessageProperties,
-    sub_nodes: AnsiSubNodeMap,
+    sub_nodes: AnsiMessageSubNodes,
+    recipient_table: AnsiTableContext,
+    attachment_table: Option<AnsiTableContext>,
 }
 
 impl<'a> AnsiMessage<'a> {
@@ -251,7 +315,7 @@ impl<'a> AnsiMessage<'a> {
         let header = pst.header();
         let root = header.root();
 
-        let (properties, sub_nodes) = {
+        let (properties, sub_nodes, recipient_table, attachment_table) = {
             let mut file = pst
                 .file()
                 .lock()
@@ -287,18 +351,63 @@ impl<'a> AnsiMessage<'a> {
 
             let block = block_btree.find_entry(file, u32::from(sub_node))?;
             let sub_nodes = AnsiSubNodeTree::read(file, &block)?;
-            let sub_nodes = sub_nodes
+            let sub_nodes: AnsiMessageSubNodes = sub_nodes
                 .entries(file, &block_btree)?
-                .map(|entry| (entry.node(), entry.block()))
+                .map(|entry| (entry.node(), entry))
                 .collect();
 
-            (properties, sub_nodes)
+            let mut recipient_table_nodes = sub_nodes.iter().filter_map(|(node_id, entry)| {
+                node_id.id_type().ok().and_then(|id_type| {
+                    if id_type == NodeIdType::RecipientTable {
+                        Some(AnsiNodeBTreeEntry::new(
+                            entry.node(),
+                            entry.block(),
+                            entry.sub_node(),
+                            None,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+            });
+            let recipient_table = match (recipient_table_nodes.next(), recipient_table_nodes.next())
+            {
+                (Some(node), None) => AnsiTableContext::read(file, encoding, &block_btree, node),
+                _ => Err(MessagingError::MessageRecipientTableNotFound.into()),
+            }?;
+
+            let mut attachment_table_nodes = sub_nodes.iter().filter_map(|(node_id, entry)| {
+                node_id.id_type().ok().and_then(|id_type| {
+                    if id_type == NodeIdType::AttachmentTable {
+                        Some(AnsiNodeBTreeEntry::new(
+                            entry.node(),
+                            entry.block(),
+                            entry.sub_node(),
+                            None,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+            });
+            let attachment_table =
+                match (attachment_table_nodes.next(), attachment_table_nodes.next()) {
+                    (None, None) => None,
+                    (Some(node), None) => {
+                        Some(AnsiTableContext::read(file, encoding, &block_btree, node)?)
+                    }
+                    _ => return Err(MessagingError::MultipleMessageAttachmentTables.into()),
+                };
+
+            (properties, sub_nodes, recipient_table, attachment_table)
         };
 
         Ok(Self {
             store,
             properties,
             sub_nodes,
+            recipient_table,
+            attachment_table,
         })
     }
 
@@ -306,7 +415,15 @@ impl<'a> AnsiMessage<'a> {
         &self.properties
     }
 
-    pub fn sub_nodes(&self) -> &AnsiSubNodeMap {
+    pub fn sub_nodes(&self) -> &AnsiMessageSubNodes {
         &self.sub_nodes
+    }
+
+    pub fn recipient_table(&self) -> &AnsiTableContext {
+        &self.recipient_table
+    }
+
+    pub fn attachment_table(&self) -> Option<&AnsiTableContext> {
+        self.attachment_table.as_ref()
     }
 }
