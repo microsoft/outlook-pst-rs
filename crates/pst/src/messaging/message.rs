@@ -168,6 +168,26 @@ impl<'a> UnicodeMessage<'a> {
         let header = pst.header();
         let root = header.root();
 
+        let node = {
+            let mut file = pst
+                .file()
+                .lock()
+                .map_err(|_| MessagingError::FailedToLockFile)?;
+            let file = &mut *file;
+
+            let node_btree = UnicodeNodeBTree::read(file, *root.node_btree())?;
+
+            node_btree.find_entry(file, u64::from(u32::from(node_id)))?
+        };
+
+        Self::read_embedded(store, node)
+    }
+
+    pub fn read_embedded(store: &'a UnicodeStore, node: UnicodeNodeBTreeEntry) -> io::Result<Self> {
+        let pst = store.pst();
+        let header = pst.header();
+        let root = header.root();
+
         let (properties, sub_nodes, recipient_table, attachment_table) = {
             let mut file = pst
                 .file()
@@ -176,10 +196,8 @@ impl<'a> UnicodeMessage<'a> {
             let file = &mut *file;
 
             let encoding = header.crypt_method();
-            let node_btree = UnicodeNodeBTree::read(file, *root.node_btree())?;
             let block_btree = UnicodeBlockBTree::read(file, *root.block_btree())?;
 
-            let node = node_btree.find_entry(file, u64::from(u32::from(node_id)))?;
             let sub_node = node
                 .sub_node()
                 .ok_or(MessagingError::MessageSubNodeTreeNotFound)?;
@@ -315,6 +333,26 @@ impl<'a> AnsiMessage<'a> {
         let header = pst.header();
         let root = header.root();
 
+        let node = {
+            let mut file = pst
+                .file()
+                .lock()
+                .map_err(|_| MessagingError::FailedToLockFile)?;
+            let file = &mut *file;
+
+            let node_btree = AnsiNodeBTree::read(file, *root.node_btree())?;
+
+            node_btree.find_entry(file, u32::from(node_id))?
+        };
+
+        Self::read_embedded(store, node)
+    }
+
+    pub fn read_embedded(store: &'a AnsiStore, node: AnsiNodeBTreeEntry) -> io::Result<Self> {
+        let pst = store.pst();
+        let header = pst.header();
+        let root = header.root();
+
         let (properties, sub_nodes, recipient_table, attachment_table) = {
             let mut file = pst
                 .file()
@@ -323,10 +361,8 @@ impl<'a> AnsiMessage<'a> {
             let file = &mut *file;
 
             let encoding = header.crypt_method();
-            let node_btree = AnsiNodeBTree::read(file, *root.node_btree())?;
             let block_btree = AnsiBlockBTree::read(file, *root.block_btree())?;
 
-            let node = node_btree.find_entry(file, u32::from(node_id))?;
             let sub_node = node
                 .sub_node()
                 .ok_or(MessagingError::MessageSubNodeTreeNotFound)?;

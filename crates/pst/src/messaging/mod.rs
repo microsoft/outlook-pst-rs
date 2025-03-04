@@ -3,6 +3,7 @@
 use std::io;
 use thiserror::Error;
 
+pub mod attachment;
 pub mod folder;
 pub mod message;
 pub mod store;
@@ -99,6 +100,36 @@ pub enum MessagingError {
     MultipleMessageRecipientTables,
     #[error("Multiple NID_TYPE_ATTACHMENT_TABLE sub-nodes on message")]
     MultipleMessageAttachmentTables,
+    #[error("Missing PidTagAttachSize on message")]
+    AttachmentSizeNotFound,
+    #[error("Invalid PidTagAttachSize on message: {0:?}")]
+    InvalidAttachmentSize(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagAttachMethod on message")]
+    AttachmentMethodNotFound,
+    #[error("Invalid PidTagAttachMethod on message: {0:?}")]
+    InvalidAttachmentMethod(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagRenderingPosition on message")]
+    AttachmentRenderingPositionNotFound,
+    #[error("Invalid PidTagRenderingPosition on message: {0:?}")]
+    InvalidAttachmentRenderingPosition(crate::ltp::prop_type::PropertyType),
+    #[error("Invalid attachment Sub-Node NID_TYPE: {0:?}")]
+    InvalidAttachmentNodeIdType(crate::ndb::node_id::NodeIdType),
+    #[error("Unrecognized PidTagAttachMethod on attachment: 0x{0:08X}")]
+    UnknownAttachmentMethod(i32),
+    #[error("Missing attachment Sub-Node on message: {0:?}")]
+    AttachmentSubNodeNotFound(crate::ndb::node_id::NodeId),
+    #[error("Missing PidTagAttachDataObject on afEmbeddedMessage attachment")]
+    AttachmentMessageObjectDataNotFound,
+    #[error("Invalid PidTagAttachDataObject on afEmbeddedMessage attachment: {0:?}")]
+    InvalidMessageObjectData(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagAttachDataBinary on afByValue attachment")]
+    AttachmentFileBinaryDataNotFound,
+    #[error("Invalid PidTagAttachDataBinary on afByValue attachment: {0:?}")]
+    InvalidAttachmentFileBinaryData(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagAttachDataObject on afStorage attachment")]
+    AttachmentStorageObjectDataNotFound,
+    #[error("Invalid PidTagAttachDataObject on afStorage attachment: {0:?}")]
+    InvalidStorageObjectData(crate::ltp::prop_type::PropertyType),
 }
 
 impl From<MessagingError> for io::Error {
