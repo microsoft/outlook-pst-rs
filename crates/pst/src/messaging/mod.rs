@@ -4,6 +4,7 @@ use std::io;
 use thiserror::Error;
 
 pub mod folder;
+pub mod message;
 pub mod store;
 
 pub(crate) mod read_write;
@@ -40,6 +41,8 @@ pub enum MessagingError {
     StoreFinderEntryIdNotFound,
     #[error("Invalid PidTagFinderEntryId on store: {0:?}")]
     InvalidStoreFinderEntryId(crate::ltp::prop_type::PropertyType),
+    #[error("EntryID in wrong store")]
+    EntryIdWrongStore,
     #[error("Missing PidTagDisplayName on folder")]
     FolderDisplayNameNotFound,
     #[error("Invalid PidTagDisplayName on folder: {0:?}")]
@@ -58,8 +61,38 @@ pub enum MessagingError {
     InvalidFolderHasSubfolders(crate::ltp::prop_type::PropertyType),
     #[error("Invalid folder EntryID NID_TYPE: {0:?}")]
     InvalidFolderEntryIdType(crate::ndb::node_id::NodeIdType),
-    #[error("EntryID in wrong store")]
-    EntryIdWrongStore,
+    #[error("Missing PidTagMessageClass on message")]
+    MessageClassNotFound,
+    #[error("Invalid PidTagMessageClass on message: {0:?}")]
+    InvalidMessageClass(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagMessageFlags on message")]
+    MessageFlagsNotFound,
+    #[error("Invalid PidTagMessageFlags on message: {0:?}")]
+    InvalidMessageFlags(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagMessageSize on message")]
+    MessageSizeNotFound,
+    #[error("Invalid PidTagMessageSize on message: {0:?}")]
+    InvalidMessageSize(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagMessageStatus on message")]
+    MessageStatusNotFound,
+    #[error("Invalid PidTagMessageStatus on message: {0:?}")]
+    InvalidMessageStatus(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagMessageCreationTime on message")]
+    MessageCreationTimeNotFound,
+    #[error("Invalid PidTagMessageCreationTime on message: {0:?}")]
+    InvalidMessageCreationTime(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagMessageLastModificationTime on message")]
+    MessageLastModificationTimeNotFound,
+    #[error("Invalid PidTagMessageLastModificationTime on message: {0:?}")]
+    InvalidMessageLastModificationTime(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagMessageSearchKey on message")]
+    MessageSearchKeyNotFound,
+    #[error("Invalid PidTagMessageSearchKey on message: {0:?}")]
+    InvalidMessageSearchKey(crate::ltp::prop_type::PropertyType),
+    #[error("Invalid message EntryID NID_TYPE: {0:?}")]
+    InvalidMessageEntryIdType(crate::ndb::node_id::NodeIdType),
+    #[error("Missing Sub-Node Tree on message")]
+    MessageSubNodeTreeNotFound,
 }
 
 impl From<MessagingError> for io::Error {

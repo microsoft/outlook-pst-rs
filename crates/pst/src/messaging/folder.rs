@@ -117,7 +117,7 @@ impl<'a> UnicodeFolder<'a> {
                 return Err(MessagingError::InvalidFolderEntryIdType(node_id_type).into());
             }
         }
-        if !store.matches_record_key(&entry_id)? {
+        if !store.matches_record_key(entry_id)? {
             return Err(MessagingError::EntryIdWrongStore.into());
         }
 
@@ -223,7 +223,7 @@ impl<'a> AnsiFolder<'a> {
                 return Err(MessagingError::InvalidFolderEntryIdType(node_id_type).into());
             }
         }
-        if !store.matches_record_key(&entry_id)? {
+        if !store.matches_record_key(entry_id)? {
             return Err(MessagingError::EntryIdWrongStore.into());
         }
 

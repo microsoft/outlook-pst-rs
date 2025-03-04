@@ -1097,6 +1097,31 @@ impl UnicodeSubNodeTree {
             }
         }
     }
+
+    pub fn entries<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        block_btree: &UnicodeBlockBTree,
+    ) -> io::Result<Box<dyn Iterator<Item = UnicodeLeafSubNodeTreeEntry>>> {
+        match self {
+            UnicodeSubNodeTree::Intermediate(block) => {
+                let entries = block
+                    .entries()
+                    .iter()
+                    .map(|entry| {
+                        let block = block_btree.find_entry(f, u64::from(entry.block()))?;
+                        let sub_nodes = UnicodeSubNodeTree::read(f, &block)?;
+                        sub_nodes.entries(f, block_btree)
+                    })
+                    .collect::<io::Result<Vec<_>>>()?;
+                Ok(Box::new(entries.into_iter().flatten()))
+            }
+            UnicodeSubNodeTree::Leaf(block) => {
+                let entries = block.entries().to_vec();
+                Ok(Box::new(entries.into_iter()))
+            }
+        }
+    }
 }
 
 pub enum AnsiSubNodeTree {
@@ -1159,6 +1184,31 @@ impl AnsiSubNodeTree {
                     .map(|entry| entry.block())
                     .ok_or(NdbError::SubNodeNotFound(node))?;
                 Ok(entry)
+            }
+        }
+    }
+
+    pub fn entries<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        block_btree: &AnsiBlockBTree,
+    ) -> io::Result<Box<dyn Iterator<Item = AnsiLeafSubNodeTreeEntry>>> {
+        match self {
+            AnsiSubNodeTree::Intermediate(block) => {
+                let entries = block
+                    .entries()
+                    .iter()
+                    .map(|entry| {
+                        let block = block_btree.find_entry(f, u32::from(entry.block()))?;
+                        let sub_nodes = AnsiSubNodeTree::read(f, &block)?;
+                        sub_nodes.entries(f, block_btree)
+                    })
+                    .collect::<io::Result<Vec<_>>>()?;
+                Ok(Box::new(entries.into_iter().flatten()))
+            }
+            AnsiSubNodeTree::Leaf(block) => {
+                let entries = block.entries().to_vec();
+                Ok(Box::new(entries.into_iter()))
             }
         }
     }
