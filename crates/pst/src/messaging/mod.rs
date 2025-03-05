@@ -164,6 +164,10 @@ pub enum MessagingError {
     InvalidNamedPropertyMapBucket(crate::ltp::prop_type::PropertyType),
     #[error("Invalid SUD wSUDType: 0x{0:04X}")]
     InvalidSearchUpdateType(u16),
+    #[error("Invalid SUD queue offset: 0x{0:08X}")]
+    InvalidSearchUpdateQueueOffset(u32),
+    #[error("Invalid SUD queue size: {0}")]
+    InvalidSearchUpdateQueueSize(usize),
 }
 
 impl From<MessagingError> for io::Error {
