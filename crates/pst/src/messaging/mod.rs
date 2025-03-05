@@ -6,6 +6,7 @@ use thiserror::Error;
 pub mod attachment;
 pub mod folder;
 pub mod message;
+pub mod named_prop;
 pub mod store;
 
 pub(crate) mod read_write;
@@ -130,6 +131,36 @@ pub enum MessagingError {
     AttachmentStorageObjectDataNotFound,
     #[error("Invalid PidTagAttachDataObject on afStorage attachment: {0:?}")]
     InvalidStorageObjectData(crate::ltp::prop_type::PropertyType),
+    #[error("NAMEID wGuid is out of bounds: 0x{0:04X}")]
+    NamedPropertyMapGuidIndexOutOfBounds(u16),
+    #[error("NAMEID wPropIdx is out of bounds: 0x{0:04X}")]
+    NamedPropertyMapPropertyIndexOutOfBounds(u16),
+    #[error("PidTagNameidBucketCount on Named Property Lookup Map is out of bounds: 0x{0:08X}")]
+    NamedPropertyMapBucketCountOutOfBounds(i32),
+    #[error("Hash bucket offset on Named Property Lookup Map is out of bounds: 0x{0:04X}")]
+    NamedPropertyMapBucketOffsetOutOfBounds(u32),
+    #[error("Invalid PidTagNameidStreamString string")]
+    NamedPropertyMapStringEntryOutOfBounds,
+    #[error("Missing PidTagNameidBucketCount on Named Property Lookup Map")]
+    NamedPropertyMapBucketCountNotFound,
+    #[error("Invalid PidTagNameidBucketCount on Named Property Lookup Map: {0:?}")]
+    InvalidNamedPropertyMapBucketCount(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagNameidStreamGuid on Named Property Lookup Map")]
+    NamedPropertyMapStreamGuidNotFound,
+    #[error("Invalid PidTagNameidStreamGuid on Named Property Lookup Map: {0:?}")]
+    InvalidNamedPropertyMapStreamGuid(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagNameidStreamEntry on Named Property Lookup Map")]
+    NamedPropertyMapStreamEntryNotFound,
+    #[error("Invalid PidTagNameidStreamEntry on Named Property Lookup Map: {0:?}")]
+    InvalidNamedPropertyMapStreamEntry(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagNameidStreamString on Named Property Lookup Map")]
+    NamedPropertyMapStreamStringNotFound,
+    #[error("Invalid PidTagNameidStreamString on Named Property Lookup Map: {0:?}")]
+    InvalidNamedPropertyMapStreamString(crate::ltp::prop_type::PropertyType),
+    #[error("Missing PidTagNameidBucketBase + hash on Named Property Lookup Map")]
+    NamedPropertyMapBucketNotFound(u16),
+    #[error("Invalid PidTagNameidBucketBase + hash on Named Property Lookup Map: {0:?}")]
+    InvalidNamedPropertyMapBucket(crate::ltp::prop_type::PropertyType),
 }
 
 impl From<MessagingError> for io::Error {
