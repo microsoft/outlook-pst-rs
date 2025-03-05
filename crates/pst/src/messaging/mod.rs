@@ -7,6 +7,7 @@ pub mod attachment;
 pub mod folder;
 pub mod message;
 pub mod named_prop;
+pub mod search;
 pub mod store;
 
 pub(crate) mod read_write;
@@ -161,6 +162,8 @@ pub enum MessagingError {
     NamedPropertyMapBucketNotFound(u16),
     #[error("Invalid PidTagNameidBucketBase + hash on Named Property Lookup Map: {0:?}")]
     InvalidNamedPropertyMapBucket(crate::ltp::prop_type::PropertyType),
+    #[error("Invalid SUD wSUDType: 0x{0:04X}")]
+    InvalidSearchUpdateType(u16),
 }
 
 impl From<MessagingError> for io::Error {

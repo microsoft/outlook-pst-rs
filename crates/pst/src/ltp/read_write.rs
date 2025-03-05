@@ -1,11 +1,8 @@
-#![allow(dead_code, unused_imports)]
+#![allow(dead_code)]
 
-use std::{
-    cmp::Ordering,
-    io::{self, Cursor, Read, Seek, SeekFrom, Write},
-};
+use std::io::{self, Read, Write};
 
-use super::{heap::*, prop_context::*, prop_type::*, table_context::*, tree::*, *};
+use super::{prop_type::*, table_context::*, *};
 
 pub trait HeapIdReadWrite: Copy + Sized {
     fn new(index: u16, block_index: u16) -> LtpResult<Self>;

@@ -1,11 +1,6 @@
-#![allow(dead_code, unused_imports)]
+#![allow(dead_code)]
 
-use std::{
-    cmp::Ordering,
-    io::{self, Cursor, Read, Seek, SeekFrom, Write},
-};
-
-use super::{store::*, *};
+use std::io::{self, Read, Write};
 
 pub trait StoreReadWrite: Sized {
     fn read(f: &mut dyn Read) -> io::Result<Self>;
@@ -13,6 +8,11 @@ pub trait StoreReadWrite: Sized {
 }
 
 pub trait NamedPropReadWrite: Sized {
+    fn read(f: &mut dyn Read) -> io::Result<Self>;
+    fn write(&self, f: &mut dyn Write) -> io::Result<()>;
+}
+
+pub trait SearchReadWrite: Sized {
     fn read(f: &mut dyn Read) -> io::Result<Self>;
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
 }
