@@ -89,7 +89,7 @@ impl TryFrom<u8> for NodeIdType {
 
 pub const MAX_NODE_INDEX: u32 = 1_u32.rotate_right(5) - 1;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NodeId(u32);
 
 impl NodeId {

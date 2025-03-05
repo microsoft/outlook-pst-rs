@@ -89,7 +89,7 @@ pub enum NdbError {
     InvalidBTreeEntrySize(u8),
     #[error("Invalid BTPAGE dwPadding: 0x{0:08X}")]
     InvalidBTreePagePadding(u32),
-    #[error("BTENTRY not found: 0x{0:6X}")]
+    #[error("BTENTRY not found: 0x{0:X}")]
     UnicodeBTreePageNotFound(u64),
     #[error("BTENTRY not found: 0x{0:X}")]
     AnsiBTreePageNotFound(u32),

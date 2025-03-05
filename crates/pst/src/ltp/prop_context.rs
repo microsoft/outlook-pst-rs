@@ -4,7 +4,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use core::mem;
 use std::{
     collections::BTreeMap,
-    fmt::Debug,
+    fmt::{Debug, Display},
     io::{self, Cursor, Read, Seek, Write},
 };
 
@@ -205,9 +205,16 @@ impl String8Value {
     }
 }
 
-impl Debug for String8Value {
+impl Display for String8Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let value = String::from_utf8_lossy(&self.buffer);
+        write!(f, "{value}")
+    }
+}
+
+impl Debug for String8Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = self.to_string();
         write!(f, "String8Value {{ {value:?} }}")
     }
 }
@@ -223,9 +230,16 @@ impl UnicodeValue {
     }
 }
 
-impl Debug for UnicodeValue {
+impl Display for UnicodeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let value = String::from_utf16_lossy(&self.buffer);
+        write!(f, "{value}")
+    }
+}
+
+impl Debug for UnicodeValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = self.to_string();
         write!(f, "UnicodeValue {{ {value:?} }}")
     }
 }
@@ -239,6 +253,15 @@ pub struct GuidValue {
 }
 
 impl GuidValue {
+    pub const fn new(data1: u32, data2: u16, data3: u16, data4: [u8; 8]) -> Self {
+        Self {
+            data1,
+            data2,
+            data3,
+            data4,
+        }
+    }
+
     pub fn data1(&self) -> u32 {
         self.data1
     }
@@ -920,6 +943,16 @@ impl UnicodePropertyContext {
         encoding: NdbCryptMethod,
         block_tree: &UnicodeBlockBTree,
     ) -> io::Result<BTreeMap<PropertyTreeRecordKey, PropertyTreeRecordValue>> {
+        let header = self.tree.header(f, encoding, block_tree)?;
+        let key_size = header.key_size();
+        if key_size != 2 {
+            return Err(LtpError::InvalidPropertyTreeKeySize(key_size).into());
+        }
+        let entry_size = header.entry_size();
+        if entry_size != 6 {
+            return Err(LtpError::InvalidPropertyTreeEntrySize(entry_size).into());
+        }
+
         Ok(self
             .tree
             .entries(f, encoding, block_tree)?

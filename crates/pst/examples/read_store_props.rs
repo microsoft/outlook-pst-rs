@@ -1,63 +1,31 @@
 use clap::Parser;
-use outlook_pst::{
-    ltp::{
-        heap::{HeapNodeType, UnicodeHeapNode},
-        prop_context::UnicodePropertyContext,
-        tree::UnicodeHeapTree,
-    },
-    ndb::{
-        block::UnicodeDataTree,
-        header::Header,
-        node_id::*,
-        page::{NodeBTreeEntry, RootBTree, UnicodeBlockBTree, UnicodeNodeBTree},
-        root::Root,
-    },
-    *,
-};
+use outlook_pst::{ltp::prop_type::PropertyType, messaging::store::UnicodeStore, *};
 
 mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    let pst = PstFile::read(&args.file).unwrap();
-    let header = pst.header();
-    let root = header.root();
+    let pst = UnicodePstFile::read(&args.file).unwrap();
+    let store = UnicodeStore::read(&pst).unwrap();
+    let properties = store.properties();
 
-    {
-        let mut file = pst.file().lock().unwrap();
-        let file = &mut *file;
+    println!("Display Name: {}", properties.display_name().unwrap());
+    println!(
+        "IPM Subtree: {:?}",
+        properties.ipm_sub_tree_entry_id().unwrap()
+    );
+    println!(
+        "Deleted Items: {:?}",
+        properties.ipm_wastebasket_entry_id().unwrap()
+    );
+    println!("Finder: {:?}", properties.finder_entry_id().unwrap());
 
-        let encoding = header.crypt_method();
-        let node_btree = UnicodeNodeBTree::read(file, *root.node_btree())?;
-        let block_btree = UnicodeBlockBTree::read(file, *root.block_btree())?;
-
-        let node = node_btree.find_entry(file, u64::from(u32::from(NID_MESSAGE_STORE)))?;
-        let data = node.data();
-        let block = block_btree.find_entry(file, u64::from(data))?;
-        let heap = UnicodeHeapNode::new(UnicodeDataTree::read(file, encoding, &block)?);
-        let header = heap.header(file, encoding, &block_btree)?;
-
-        assert_eq!(header.client_signature(), HeapNodeType::Properties);
-
-        let tree = UnicodeHeapTree::new(heap, header.user_root());
-        let tree_header = tree.header(file, encoding, &block_btree)?;
-
-        assert_eq!(tree_header.key_size(), 2);
-        assert_eq!(tree_header.entry_size(), 6);
-
-        let prop_context = UnicodePropertyContext::new(node, tree);
-        let properties = prop_context.properties(file, encoding, &block_btree)?;
-
-        for (prop_id, record) in properties {
-            println!(
-                "Property ID: 0x{prop_id:04X}, Type: {:?}",
-                record.prop_type()
-            );
-            println!(" Record: {:?}", record);
-
-            let value = prop_context.read_property(file, encoding, &block_btree, record)?;
-            println!(" Value: {:?}", value);
-        }
+    for (prop_id, value) in properties.iter() {
+        println!(
+            " Property ID: 0x{prop_id:04X}, Type: {:?}",
+            PropertyType::from(value)
+        );
+        println!("  Value: {:?}", value);
     }
 
     Ok(())

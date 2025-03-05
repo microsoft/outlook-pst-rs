@@ -41,7 +41,7 @@ pub struct TableContextInfo {
     end_1byte_values: u16,
     end_existence_bitmap: u16,
     row_index: HeapId,
-    rows: NodeId,
+    rows: Option<NodeId>,
     deprecated_index: u32,
     columns: Vec<TableColumnDescriptor>,
 }
@@ -53,7 +53,7 @@ impl TableContextInfo {
         end_1byte_values: u16,
         end_existence_bitmap: u16,
         row_index: HeapId,
-        rows: NodeId,
+        rows: Option<NodeId>,
         columns: Vec<TableColumnDescriptor>,
     ) -> LtpResult<Self> {
         if columns.len() > 0xFF {
@@ -285,6 +285,11 @@ impl TableContextReadWrite for TableContextInfo {
 
         // hnidRows
         let rows = NodeId::read(f)?;
+        let rows = if u32::from(rows) == 0 {
+            None
+        } else {
+            Some(rows)
+        };
 
         // hidIndex
         let deprecated_index = f.read_u32::<LittleEndian>()?;
@@ -330,7 +335,7 @@ impl TableContextReadWrite for TableContextInfo {
         self.row_index.write(f)?;
 
         // hnidRows
-        self.rows.write(f)?;
+        self.rows.unwrap_or_default().write(f)?;
 
         // hidIndex
         f.write_u32::<LittleEndian>(self.deprecated_index)?;
@@ -819,31 +824,30 @@ impl UnicodeTableContext {
         let cursor = heap.find_entry(header.user_root(), f, encoding, block_btree)?;
         let context = TableContextInfo::read(&mut cursor.as_slice())?;
 
-        let row_matrix = match context.rows.id_type() {
-            Ok(NodeIdType::HeapNode) => heap.find_entry(
-                HeapId::from(u32::from(context.rows)),
-                f,
-                encoding,
-                block_btree,
-            )?,
-            _ => {
-                let sub_node = node
-                    .sub_node()
-                    .ok_or(LtpError::PropertySubNodeValueNotFound(u32::from(
-                        context.rows,
-                    )))?;
-                let block = block_btree.find_entry(f, u64::from(sub_node))?;
-                let sub_node_tree = UnicodeSubNodeTree::read(f, &block)?;
-                let block = sub_node_tree.find_entry(f, block_btree, context.rows)?;
-                let block = block_btree.find_entry(f, u64::from(block))?;
-                let data_tree = UnicodeDataTree::read(f, encoding, &block)?;
-                let blocks: Vec<_> = data_tree.blocks(f, encoding, block_btree)?.collect();
-                blocks
-                    .iter()
-                    .flat_map(|block| block.data())
-                    .copied()
-                    .collect()
+        let row_matrix = if let Some(rows) = context.rows {
+            match rows.id_type() {
+                Ok(NodeIdType::HeapNode) => {
+                    heap.find_entry(HeapId::from(u32::from(rows)), f, encoding, block_btree)?
+                }
+                _ => {
+                    let sub_node = node
+                        .sub_node()
+                        .ok_or(LtpError::PropertySubNodeValueNotFound(u32::from(rows)))?;
+                    let block = block_btree.find_entry(f, u64::from(sub_node))?;
+                    let sub_node_tree = UnicodeSubNodeTree::read(f, &block)?;
+                    let block = sub_node_tree.find_entry(f, block_btree, rows)?;
+                    let block = block_btree.find_entry(f, u64::from(block))?;
+                    let data_tree = UnicodeDataTree::read(f, encoding, &block)?;
+                    let blocks: Vec<_> = data_tree.blocks(f, encoding, block_btree)?.collect();
+                    blocks
+                        .iter()
+                        .flat_map(|block| block.data())
+                        .copied()
+                        .collect()
+                }
             }
+        } else {
+            Default::default()
         };
         let row_count = row_matrix.len() / context.end_existence_bitmap() as usize;
         let mut cursor = Cursor::new(&row_matrix);
@@ -949,31 +953,30 @@ impl AnsiTableContext {
         let cursor = heap.find_entry(header.user_root(), f, encoding, block_btree)?;
         let context = TableContextInfo::read(&mut cursor.as_slice())?;
 
-        let row_matrix = match context.rows.id_type() {
-            Ok(NodeIdType::HeapNode) => heap.find_entry(
-                HeapId::from(u32::from(context.rows)),
-                f,
-                encoding,
-                block_btree,
-            )?,
-            _ => {
-                let sub_node = node
-                    .sub_node()
-                    .ok_or(LtpError::PropertySubNodeValueNotFound(u32::from(
-                        context.rows,
-                    )))?;
-                let block = block_btree.find_entry(f, u32::from(sub_node))?;
-                let sub_node_tree = AnsiSubNodeTree::read(f, &block)?;
-                let block = sub_node_tree.find_entry(f, block_btree, context.rows)?;
-                let block = block_btree.find_entry(f, u32::from(block))?;
-                let data_tree = AnsiDataTree::read(f, encoding, &block)?;
-                let blocks: Vec<_> = data_tree.blocks(f, encoding, block_btree)?.collect();
-                blocks
-                    .iter()
-                    .flat_map(|block| block.data())
-                    .copied()
-                    .collect()
+        let row_matrix = if let Some(rows) = context.rows {
+            match rows.id_type() {
+                Ok(NodeIdType::HeapNode) => {
+                    heap.find_entry(HeapId::from(u32::from(rows)), f, encoding, block_btree)?
+                }
+                _ => {
+                    let sub_node = node
+                        .sub_node()
+                        .ok_or(LtpError::PropertySubNodeValueNotFound(u32::from(rows)))?;
+                    let block = block_btree.find_entry(f, u32::from(sub_node))?;
+                    let sub_node_tree = AnsiSubNodeTree::read(f, &block)?;
+                    let block = sub_node_tree.find_entry(f, block_btree, rows)?;
+                    let block = block_btree.find_entry(f, u32::from(block))?;
+                    let data_tree = AnsiDataTree::read(f, encoding, &block)?;
+                    let blocks: Vec<_> = data_tree.blocks(f, encoding, block_btree)?.collect();
+                    blocks
+                        .iter()
+                        .flat_map(|block| block.data())
+                        .copied()
+                        .collect()
+                }
             }
+        } else {
+            Default::default()
         };
         let row_count = row_matrix.len() / context.end_existence_bitmap() as usize;
         let mut cursor = Cursor::new(&row_matrix);
