@@ -587,13 +587,6 @@ where
             buf,
         );
 
-        // let reading_pane = Rect {
-        //     x: reading_pane.x + 1,
-        //     width: reading_pane.width - 2,
-        //     height: reading_pane.height - 1,
-        //     ..reading_pane
-        // };
-
         let sub_folders = current_folder
             .map(|folder| folder.sub_folders())
             .unwrap_or_else(|| self.ipm_sub_tree.root_folders())
