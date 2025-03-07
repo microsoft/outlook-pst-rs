@@ -17,4 +17,6 @@ categories = [ "os::windows-apis" ]
 anyhow = "1"
 byteorder = "1"
 clap = { version = "4", features = ["derive"] }
+crossterm = "0.28.1"
+ratatui = "0.29.0"
 thiserror = "2"
