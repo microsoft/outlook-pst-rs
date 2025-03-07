@@ -980,6 +980,10 @@ impl UnicodePropertyContext {
     ) -> io::Result<PropertyValue> {
         match value.value() {
             PropertyValueRecord::Heap(heap_id) => {
+                if u32::from(heap_id) == 0 {
+                    return Ok(PropertyValue::Null);
+                }
+
                 let data = self
                     .tree
                     .heap()

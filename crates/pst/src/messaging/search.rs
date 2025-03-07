@@ -5,7 +5,7 @@ use std::io::{self, Cursor, Read, Seek, Write};
 
 use super::{read_write::*, *};
 use crate::ndb::{
-    block::{AnsiDataTree, Block, UnicodeDataTree},
+    block::{AnsiDataTree, UnicodeDataTree},
     header::NdbCryptMethod,
     node_id::NodeId,
     page::{
@@ -449,7 +449,7 @@ impl UnicodeSearchUpdateQueue {
         let tree = UnicodeDataTree::read(f, encoding, &block)?;
         let data: Vec<_> = tree
             .blocks(f, encoding, block_btree)?
-            .flat_map(|b| b.data().to_vec().into_iter())
+            .flat_map(Vec::from)
             .skip(start as usize)
             .collect();
 
@@ -502,7 +502,7 @@ impl AnsiSearchUpdateQueue {
         let tree = AnsiDataTree::read(f, encoding, &block)?;
         let data: Vec<_> = tree
             .blocks(f, encoding, block_btree)?
-            .flat_map(|b| b.data().to_vec().into_iter())
+            .flat_map(Vec::from)
             .skip(start as usize)
             .collect();
 

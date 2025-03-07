@@ -143,7 +143,11 @@ impl<'a> UnicodeAttachment<'a> {
         self.message
     }
 
-    pub fn read(message: &'a UnicodeMessage, sub_node: NodeId) -> io::Result<Self> {
+    pub fn read(
+        message: &'a UnicodeMessage,
+        sub_node: NodeId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Self> {
         let node_id_type = sub_node.id_type()?;
         match node_id_type {
             NodeIdType::Attachment => {}
@@ -233,7 +237,7 @@ impl<'a> UnicodeAttachment<'a> {
                         node.sub_node(),
                         None,
                     );
-                    let message = UnicodeMessage::read_embedded(store, node)?;
+                    let message = UnicodeMessage::read_embedded(store, node, prop_ids)?;
                     Some(UnicodeAttachmentData::Message(message))
                 }
                 AttachmentMethod::Storage => {
