@@ -269,6 +269,12 @@ impl BlockReadWrite for UnicodeDataBlock {
     }
 }
 
+impl From<UnicodeDataBlock> for Vec<u8> {
+    fn from(value: UnicodeDataBlock) -> Self {
+        value.data
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct AnsiDataBlock {
     encoding: NdbCryptMethod,
@@ -311,6 +317,12 @@ impl Block for AnsiDataBlock {
 impl BlockReadWrite for AnsiDataBlock {
     fn new(encoding: NdbCryptMethod, data: Vec<u8>, trailer: AnsiBlockTrailer) -> NdbResult<Self> {
         Self::new(encoding, data, trailer)
+    }
+}
+
+impl From<AnsiDataBlock> for Vec<u8> {
+    fn from(value: AnsiDataBlock) -> Self {
+        value.data
     }
 }
 
