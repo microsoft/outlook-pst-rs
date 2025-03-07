@@ -1,23 +1,22 @@
-#![allow(dead_code, unused_imports)]
+#![allow(dead_code)]
 
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Style, Stylize},
-    symbols::border,
-    text::{Line, Text},
-    widgets::{Block, Borders, List, ListState, Paragraph, StatefulWidget},
+    symbols::{self, border},
+    text::Line,
+    widgets::{Block, Borders, List, ListState, Paragraph, StatefulWidget, Widget},
     DefaultTerminal, Frame,
 };
-use std::{cell::OnceCell, io, sync::Once};
+use std::{cell::OnceCell, io};
 
 use outlook_pst::{
     ltp::{
         prop_context::PropertyValue,
-        prop_type::PropertyType,
-        table_context::{TableContextInfo, TableRowData, UnicodeTableContext},
+        table_context::{TableRowData, UnicodeTableContext},
     },
     messaging::{
         attachment::UnicodeAttachment,
@@ -183,7 +182,6 @@ where
 enum MessageOrRow<'store> {
     Message(UnicodeMessage<'store>),
     Row {
-        entry_id: EntryId,
         subject: Option<String>,
         received_time: i64,
     },
@@ -210,12 +208,14 @@ fn decode_subject(value: &PropertyValue) -> Option<String> {
 }
 
 struct Message<'store, 'message> {
+    entry_id: EntryId,
     message: MessageOrRow<'store>,
     recipients: OnceCell<Vec<Recipient>>,
     body: OnceCell<anyhow::Result<Option<Body>>>,
     attachments: OnceCell<anyhow::Result<Vec<Attachment<'store, 'message>>>>,
     pst_store: &'store UnicodeStore<'store>,
     pst_message: OnceCell<anyhow::Result<UnicodeMessage<'store>>>,
+    pst_full_message: OnceCell<anyhow::Result<UnicodeMessage<'store>>>,
     pst_attachments: OnceCell<anyhow::Result<Vec<UnicodeAttachment<'store>>>>,
 }
 
@@ -277,8 +277,8 @@ where
                     .unwrap_or(0);
 
                 Self {
+                    entry_id,
                     message: MessageOrRow::Row {
-                        entry_id,
                         subject,
                         received_time,
                     },
@@ -287,40 +287,54 @@ where
                     attachments: Default::default(),
                     pst_store: store,
                     pst_message: Default::default(),
+                    pst_full_message: Default::default(),
                     pst_attachments: Default::default(),
                 }
             }
-            _ => Self {
-                message: MessageOrRow::Message(UnicodeMessage::read(
+            _ => {
+                let message = MessageOrRow::Message(UnicodeMessage::read(
                     store,
                     &entry_id,
                     Some(&[0x0037, 0x0E06]),
-                )?),
-                recipients: Default::default(),
-                body: Default::default(),
-                attachments: Default::default(),
-                pst_store: store,
-                pst_message: Default::default(),
-                pst_attachments: Default::default(),
-            },
+                )?);
+
+                Self {
+                    entry_id,
+                    message,
+                    recipients: Default::default(),
+                    body: Default::default(),
+                    attachments: Default::default(),
+                    pst_store: store,
+                    pst_message: Default::default(),
+                    pst_full_message: Default::default(),
+                    pst_attachments: Default::default(),
+                }
+            }
         })
     }
 
     fn message(&'message self) -> anyhow::Result<&'store UnicodeMessage<'store>> {
         match &self.message {
             MessageOrRow::Message(message) => Ok(message),
-            MessageOrRow::Row { entry_id, .. } => self
+            MessageOrRow::Row { .. } => self
                 .pst_message
                 .get_or_init(|| {
                     Ok(UnicodeMessage::read(
                         self.pst_store,
-                        entry_id,
+                        &self.entry_id,
                         Some(&[0x0037, 0x0E06]),
                     )?)
                 })
                 .as_ref()
                 .map_err(|err| anyhow::anyhow!("{err:?}")),
         }
+    }
+
+    fn full_message(&'message self) -> anyhow::Result<&'store UnicodeMessage<'store>> {
+        self.pst_full_message
+            .get_or_init(|| Ok(UnicodeMessage::read(self.pst_store, &self.entry_id, None)?))
+            .as_ref()
+            .map_err(|err| anyhow::anyhow!("{err:?}"))
     }
 
     fn subject(&self) -> anyhow::Result<Option<String>> {
@@ -544,48 +558,72 @@ where
     type State = AppState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut AppState) {
-        let [folder_list, message_list] =
+        let block = Block::bordered().border_set(border::THICK);
+        block.render(area, buf);
+
+        let [folder_list, right_side] =
             Layout::horizontal([Constraint::Percentage(25), Constraint::Percentage(75)])
                 .areas(area);
+        let [message_list, reading_pane] =
+            Layout::vertical([Constraint::Percentage(50); 2]).areas(right_side);
+        let block = Block::bordered().border_set(border::Set {
+            top_left: symbols::line::THICK_HORIZONTAL_DOWN,
+            bottom_left: symbols::line::THICK_VERTICAL_RIGHT,
+            bottom_right: symbols::line::THICK_VERTICAL_LEFT,
+            ..border::THICK
+        });
+        block.render(message_list, buf);
+
+        let block = Block::new()
+            .borders(Borders::LEFT | Borders::BOTTOM | Borders::RIGHT)
+            .border_set(border::Set {
+                bottom_left: symbols::line::THICK_HORIZONTAL_UP,
+                ..border::THICK
+            });
+        block.render(reading_pane, buf);
 
         let mut title = self.ipm_sub_tree.display_name();
         let mut current_folder: Option<&Folder> = None;
         for &index in &state.folder_path {
-            if let Some(folder) = current_folder {
-                title = format!("{title} > {}", folder.name);
-                let Some(next_folder) = folder
-                    .sub_folders()
-                    .ok()
-                    .and_then(|folders| folders.get(index))
-                else {
-                    break;
-                };
-                current_folder = Some(next_folder);
-            } else {
-                let Some(next_folder) = self
-                    .ipm_sub_tree
-                    .root_folders()
-                    .ok()
-                    .and_then(|folders| folders.get(index))
-                else {
-                    break;
-                };
-                current_folder = Some(next_folder);
-            }
+            current_folder = current_folder
+                .and_then(|folder| folder.sub_folders().ok())
+                .or_else(|| self.ipm_sub_tree.root_folders().ok())
+                .and_then(|folders| folders.get(index));
+
+            let Some(current_folder) = current_folder else {
+                break;
+            };
+
+            title = format!("{title} > {}", current_folder.name);
         }
+
         let title = Line::from(title.bold());
+        title.render(
+            area.inner(Margin {
+                horizontal: 3,
+                vertical: 0,
+            }),
+            buf,
+        );
+
+        // let reading_pane = Rect {
+        //     x: reading_pane.x + 1,
+        //     width: reading_pane.width - 2,
+        //     height: reading_pane.height - 1,
+        //     ..reading_pane
+        // };
+
         let sub_folders = current_folder
             .map(|folder| folder.sub_folders())
             .unwrap_or_else(|| self.ipm_sub_tree.root_folders())
             .unwrap_or(&[]);
 
+        let folder_list = folder_list.inner(Margin {
+            horizontal: 1,
+            vertical: 1,
+        });
         StatefulWidget::render(
             List::new(sub_folders.iter().map(|folder| folder.name.as_str()))
-                .block(
-                    Block::bordered()
-                        .title(title.left_aligned())
-                        .border_set(border::THICK),
-                )
                 .style(Style::new().white())
                 .highlight_style(Style::new().bold().blue()),
             folder_list,
@@ -600,6 +638,10 @@ where
             .and_then(|folder| folder.messages().ok())
             .unwrap_or(&[]);
 
+        let message_list = message_list.inner(Margin {
+            horizontal: 1,
+            vertical: 1,
+        });
         StatefulWidget::render(
             List::new(messages.iter().map(|message| {
                 message
@@ -608,13 +650,55 @@ where
                     .flatten()
                     .unwrap_or("(no subject)".to_string())
             }))
-            .block(Block::bordered().border_set(border::THICK))
             .style(Style::new().white())
             .highlight_style(Style::new().bold().blue()),
             message_list,
             buf,
             &mut state.message_state,
         );
+
+        let preview = state
+            .message_state
+            .selected()
+            .and_then(|index| messages.get(index))
+            .and_then(|message| message.full_message().ok())
+            .and_then(|message| {
+                message
+                    .properties()
+                    .get(0x1000)
+                    .and_then(|value| match value {
+                        PropertyValue::String8(value) => Some(value.to_string()),
+                        PropertyValue::Unicode(value) => Some(value.to_string()),
+                        _ => None,
+                    })
+                    .or_else(|| {
+                        message.properties().get(0x1013).and_then(|value| {
+                            match (value, message.properties().get(0x3FDE)) {
+                                (
+                                    PropertyValue::Binary(value),
+                                    Some(PropertyValue::Integer32(cpid)),
+                                ) => {
+                                    let code_page = u16::try_from(*cpid).ok()?;
+                                    let encoding = codepage::to_encoding(code_page)?;
+                                    Some(encoding.decode(value.buffer()).0.to_string())
+                                }
+                                _ => None,
+                            }
+                        })
+                    })
+            })
+            .unwrap_or_else(|| "Hello, World!".to_string());
+
+        let reading_pane = Rect {
+            y: reading_pane.y,
+            ..reading_pane.inner(Margin {
+                horizontal: 1,
+                vertical: 1,
+            })
+        };
+        Paragraph::new(preview)
+            .style(Style::new().white())
+            .render(reading_pane, buf);
     }
 }
 
