@@ -17,5 +17,6 @@ thiserror.workspace = true
 [dev-dependencies]
 anyhow.workspace = true
 clap.workspace = true
+codepage-strings.workspace = true
 crossterm.workspace = true
 ratatui.workspace = true

@@ -325,7 +325,11 @@ impl<'a> AnsiMessage<'a> {
         self.store
     }
 
-    pub fn read(store: &'a AnsiStore, entry_id: &EntryId) -> io::Result<Self> {
+    pub fn read(
+        store: &'a AnsiStore,
+        entry_id: &EntryId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Self> {
         let node_id = entry_id.node_id();
         let node_id_type = node_id.id_type()?;
         match node_id_type {
@@ -354,10 +358,14 @@ impl<'a> AnsiMessage<'a> {
             node_btree.find_entry(file, u32::from(node_id))?
         };
 
-        Self::read_embedded(store, node)
+        Self::read_embedded(store, node, prop_ids)
     }
 
-    pub fn read_embedded(store: &'a AnsiStore, node: AnsiNodeBTreeEntry) -> io::Result<Self> {
+    pub fn read_embedded(
+        store: &'a AnsiStore,
+        node: AnsiNodeBTreeEntry,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Self> {
         let pst = store.pst();
         let header = pst.header();
         let root = header.root();
@@ -386,6 +394,7 @@ impl<'a> AnsiMessage<'a> {
             let properties = prop_context
                 .properties(file, encoding, &block_btree)?
                 .into_iter()
+                .filter(|(prop_id, _)| prop_ids.map_or(true, |ids| ids.contains(prop_id)))
                 .map(|(prop_id, record)| {
                     prop_context
                         .read_property(file, encoding, &block_btree, record)
