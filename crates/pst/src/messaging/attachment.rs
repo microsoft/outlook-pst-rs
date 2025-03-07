@@ -300,7 +300,11 @@ impl<'a> AnsiAttachment<'a> {
         self.message
     }
 
-    pub fn read(message: &'a AnsiMessage, sub_node: NodeId) -> io::Result<Self> {
+    pub fn read(
+        message: &'a AnsiMessage,
+        sub_node: NodeId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Self> {
         let node_id_type = sub_node.id_type()?;
         match node_id_type {
             NodeIdType::Attachment => {}
@@ -386,7 +390,7 @@ impl<'a> AnsiAttachment<'a> {
                         .ok_or(MessagingError::AttachmentSubNodeNotFound(sub_node))?;
                     let node =
                         AnsiNodeBTreeEntry::new(node.node(), node.block(), node.sub_node(), None);
-                    let message = AnsiMessage::read_embedded(store, node)?;
+                    let message = AnsiMessage::read_embedded(store, node, prop_ids)?;
                     Some(AnsiAttachmentData::Message(message))
                 }
                 AttachmentMethod::Storage => {

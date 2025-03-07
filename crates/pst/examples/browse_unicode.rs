@@ -29,6 +29,7 @@ use outlook_pst::{
 };
 
 mod args;
+mod encoding;
 
 struct IpmSubTree<'store, 'tree> {
     display_name: OnceCell<anyhow::Result<String>>,
@@ -187,26 +188,6 @@ enum MessageOrRow<'store> {
     },
 }
 
-fn decode_subject(value: &PropertyValue) -> Option<String> {
-    match value {
-        PropertyValue::String8(value) => {
-            let offset = match value.buffer().first() {
-                Some(1) => 2,
-                _ => 0,
-            };
-            Some(String::from_utf8_lossy(&value.buffer()[offset..]).to_string())
-        }
-        PropertyValue::Unicode(value) => {
-            let offset = match value.buffer().first() {
-                Some(1) => 2,
-                _ => 0,
-            };
-            Some(String::from_utf16_lossy(&value.buffer()[offset..]))
-        }
-        _ => None,
-    }
-}
-
 struct Message<'store, 'message> {
     entry_id: EntryId,
     message: MessageOrRow<'store>,
@@ -257,7 +238,7 @@ where
                             .ok()
                     })
                     .as_ref()
-                    .and_then(decode_subject);
+                    .and_then(encoding::decode_subject);
 
                 let received_time = columns[received_col]
                     .as_ref()
@@ -341,7 +322,7 @@ where
         match &self.message {
             MessageOrRow::Message(message) => {
                 let properties = message.properties();
-                Ok(properties.get(0x0037).and_then(decode_subject))
+                Ok(properties.get(0x0037).and_then(encoding::decode_subject))
             }
             MessageOrRow::Row { subject, .. } => Ok(subject.clone()),
         }
@@ -679,8 +660,7 @@ where
                                     Some(PropertyValue::Integer32(cpid)),
                                 ) => {
                                     let code_page = u16::try_from(*cpid).ok()?;
-                                    let encoding = codepage::to_encoding(code_page)?;
-                                    Some(encoding.decode(value.buffer()).0.to_string())
+                                    encoding::decode_html_body(value.buffer(), code_page)
                                 }
                                 _ => None,
                             }
