@@ -64,11 +64,10 @@ where
     }
 
     fn store(&'tree self) -> anyhow::Result<&'store AnsiStore<'store>> {
-        Ok(self
-            .pst_store
+        self.pst_store
             .get_or_init(|| Ok(AnsiStore::read(&self.pst_file)?))
             .as_ref()
-            .map_err(|err| anyhow::anyhow!("{err:?}"))?)
+            .map_err(|err| anyhow::anyhow!("{err:?}"))
     }
 
     fn root_folders(&'tree self) -> anyhow::Result<&'tree [Folder<'store, 'tree>]> {
@@ -165,18 +164,17 @@ where
     }
 
     fn messages(&'folder self) -> anyhow::Result<&'folder [Message<'store, 'folder>]> {
-        Ok(self
-            .messages
+        self.messages
             .get_or_init(|| {
                 let contents_table = self.pst_folder.contents_table();
                 contents_table
                     .rows_matrix()
-                    .map(|row| Ok(Message::new(self.pst_folder.store(), contents_table, &row)?))
+                    .map(|row| Message::new(self.pst_folder.store(), contents_table, row))
                     .collect::<anyhow::Result<Vec<_>>>()
             })
             .as_ref()
             .map(Vec::as_slice)
-            .map_err(|err| anyhow::anyhow!("{err:?}"))?)
+            .map_err(|err| anyhow::anyhow!("{err:?}"))
     }
 }
 

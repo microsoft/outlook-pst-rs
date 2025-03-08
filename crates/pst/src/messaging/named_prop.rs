@@ -208,7 +208,7 @@ impl NameIdEntry {
         let guid = u16::from(self.guid);
         let (prop_id, guid_index) = match self.id {
             NamedPropertyId::Number(id) => (id, guid << 1),
-            NamedPropertyId::StringOffset(offset) => (offset, guid << 1 | 0x0001),
+            NamedPropertyId::StringOffset(offset) => (offset, (guid << 1) | 0x0001),
         };
 
         prop_id ^ u32::from(guid_index)
@@ -240,7 +240,7 @@ impl NamedPropReadWrite for NameIdEntry {
         let guid = u16::from(self.guid);
         let (prop_id, guid_index) = match self.id {
             NamedPropertyId::Number(id) => (id, guid << 1),
-            NamedPropertyId::StringOffset(offset) => (offset, guid << 1 | 0x0001),
+            NamedPropertyId::StringOffset(offset) => (offset, (guid << 1) | 0x0001),
         };
         let prop_index = u16::from(self.prop_index);
 

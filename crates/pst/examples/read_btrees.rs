@@ -30,12 +30,12 @@ fn main() -> anyhow::Result<()> {
     {
         let mut file = pst.file().lock().unwrap();
 
-        output_block_btree(&mut *file, None, *root.block_btree())?;
+        output_block_btree(&mut file, None, *root.block_btree())?;
         println!();
 
         let block_btree = UnicodeBlockBTree::read(&mut *file, *root.block_btree())?;
         output_node_btree(
-            &mut *file,
+            &mut file,
             header.crypt_method(),
             None,
             &block_btree,
@@ -83,7 +83,7 @@ fn output_data_tree(
                 output_data_tree(
                     file,
                     encoding,
-                    &indent,
+                    indent,
                     max_level,
                     block_btree,
                     entry.block(),
