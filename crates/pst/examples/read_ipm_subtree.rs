@@ -33,7 +33,7 @@ fn main() -> anyhow::Result<()> {
 
             println!("  Record: {value:?}");
 
-            let value = store.read_table_column(&hierarchy_table, &value, column.prop_type())?;
+            let value = store.read_table_column(hierarchy_table, &value, column.prop_type())?;
             println!("  Value: {:?}", value);
         }
     }

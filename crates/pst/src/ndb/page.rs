@@ -378,7 +378,7 @@ impl DensityListPageEntry {
             return Err(NdbError::InvalidDensityListEntryFreeSlots(free_slots));
         };
 
-        Ok(Self(page | (free_slots as u32) << 20))
+        Ok(Self(page | ((free_slots as u32) << 20)))
     }
 
     pub fn read(f: &mut dyn Read) -> io::Result<Self> {

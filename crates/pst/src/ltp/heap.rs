@@ -25,7 +25,7 @@ impl HeapId {
             return Err(LtpError::InvalidHeapIndex(index));
         };
 
-        let node_index = (block_index as u32) << 11 | index as u32;
+        let node_index = ((block_index as u32) << 11) | index as u32;
 
         Ok(Self(NodeId::new(NodeIdType::HeapNode, node_index)?))
     }
