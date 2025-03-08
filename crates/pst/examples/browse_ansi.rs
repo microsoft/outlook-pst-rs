@@ -64,8 +64,7 @@ where
     }
 
     fn store(&'tree self) -> anyhow::Result<&'store AnsiStore<'store>> {
-        self
-            .pst_store
+        self.pst_store
             .get_or_init(|| Ok(AnsiStore::read(&self.pst_file)?))
             .as_ref()
             .map_err(|err| anyhow::anyhow!("{err:?}"))
@@ -165,8 +164,7 @@ where
     }
 
     fn messages(&'folder self) -> anyhow::Result<&'folder [Message<'store, 'folder>]> {
-        self
-            .messages
+        self.messages
             .get_or_init(|| {
                 let contents_table = self.pst_folder.contents_table();
                 contents_table
