@@ -1,14 +1,16 @@
-# Project
+# Outlook PST Store Provider in Rust
 
-> This repo has been populated by an initial template to help get you started. Please
-> make sure to update the content to build a great experience for community-building.
+This project contains a collection of Rust crates which are meant to be a "clean room"
+implementation of the [MS-PST](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/141923d5-15ab-4ef1-a524-6dce75aae546)
+open specification, along with other open specifications related to that. This serves as a
+cross-platform reference implementation that's compatible with the `mspst32.dll` Outlook MAPI store
+provider on Windows. Maintaining portability across operating systems and processor architectures
+is a top priority for this project.
 
-As the maintainer of this project, please make a few updates:
-
-- Improving this README.MD file to provide a great experience
-- Updating SUPPORT.MD with content about this project's support experience
-- Understanding the security reporting process in SECURITY.MD
-- Remove this section from the README
+The API exposed by these crates is still very experimental and subject to breaking changes until
+each crate reaches its 1.0 release. These crates should eventually support creating new PST files
+and/or modifying existing ones as well, but that will likely wait until we're confident in the API
+for read-only support first.
 
 ## Contributing
 
