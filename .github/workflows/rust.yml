@@ -40,4 +40,4 @@ jobs:
         run: cargo test --verbose
 
       - name: Check clippy
-        run: cargo clippy --verbose
+        run: cargo clippy --verbose -- -D warnings
