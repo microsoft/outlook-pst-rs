@@ -3,6 +3,7 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use core::mem;
 use std::{
+    fmt::Debug,
     io::{self, Cursor, Read, Seek, SeekFrom, Write},
     marker::PhantomData,
 };
@@ -65,7 +66,7 @@ impl PageType {
 
 /// [PAGETRAILER](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/f4ccb38a-930a-4db4-98df-a69c195926ba)
 pub trait PageTrailer {
-    type BlockId: BlockId;
+    type BlockId: BlockId + Debug;
 
     fn page_type(&self) -> PageType;
     fn signature(&self) -> u16;
@@ -1840,7 +1841,7 @@ where
         f.read_exact(&mut buffer)?;
         let mut cursor = Cursor::new(buffer);
 
-        cursor.seek(SeekFrom::Start(UNICODE_BTREE_ENTRIES_SIZE as u64 + 3))?;
+        cursor.seek(SeekFrom::Start(ANSI_BTREE_ENTRIES_SIZE as u64 + 3))?;
         let level = cursor.read_u8()?;
 
         cursor.seek(SeekFrom::Start(0))?;
