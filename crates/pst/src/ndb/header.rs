@@ -512,16 +512,16 @@ impl HeaderReadWrite for AnsiHeader {
             return Err(NdbError::InvalidNdbHeaderReservedValue(reserved).into());
         }
 
-        // rgbReserved, ullReserved, dwReserved (total 14 bytes)
-        let mut reserved = [0_u8; 14];
+        // ullReserved, dwReserved (total 12 bytes)
+        let mut reserved = [0_u8; 12];
         cursor.read_exact(&mut reserved)?;
-        if reserved != [0; 14] {
+        if reserved != [0; 12] {
             return Err(NdbError::InvalidNdbHeaderAnsiReservedBytes.into());
         }
 
         // rgbReserved2, bReserved, rgbReserved3 (total 36 bytes)
         let mut reserved3 = [0_u8; 36];
-        f.read_exact(&mut reserved3)?;
+        cursor.read_exact(&mut reserved3)?;
 
         Ok(Self {
             next_page,
@@ -574,6 +574,10 @@ impl HeaderReadWrite for AnsiHeader {
         cursor.write_u8(self.crypt_method as u8)?;
         // rgbReserved
         cursor.write_u16::<LittleEndian>(0)?;
+        // ullReserved, dwReserved (total 12 bytes)
+        cursor.write_all(&[0_u8; 12])?;
+        // rgbReserved2, bReserved, rgbReserved3 (total 36 bytes)
+        cursor.write_all(&self.reserved3)?;
 
         let crc_data = cursor.into_inner();
         let crc_partial = compute_crc(0, &crc_data[..471]);
@@ -583,10 +587,7 @@ impl HeaderReadWrite for AnsiHeader {
         // dwCRCPartial
         f.write_u32::<LittleEndian>(crc_partial)?;
 
-        f.write_all(&crc_data)?;
-
-        // rgbReserved2, bReserved, rgbReserved3 (total 36 bytes)
-        f.write_all(&self.reserved3)
+        f.write_all(&crc_data)
     }
 }
 

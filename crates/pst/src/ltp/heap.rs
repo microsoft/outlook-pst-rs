@@ -550,7 +550,7 @@ impl UnicodeHeapNode {
                 let header = HeapNodeHeader::read(&mut cursor)?;
                 header.page_map_offset()
             }
-            bitmap if bitmap >= 8 && (bitmap - 8) % 128 == 0 => {
+            bitmap if bitmap % 128 == 8 => {
                 let header = HeapNodeBitmapHeader::read(&mut cursor)?;
                 header.page_map_offset()
             }
@@ -627,7 +627,7 @@ impl AnsiHeapNode {
                 let header = HeapNodeHeader::read(&mut cursor)?;
                 header.page_map_offset()
             }
-            bitmap if (bitmap - 8) % 128 == 0 => {
+            bitmap if bitmap % 128 == 8 => {
                 let header = HeapNodeBitmapHeader::read(&mut cursor)?;
                 header.page_map_offset()
             }

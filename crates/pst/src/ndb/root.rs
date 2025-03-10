@@ -1,5 +1,7 @@
 //! [ROOT](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/32ce8c94-4757-46c8-a169-3fd21abee584)
 
+use std::fmt::Debug;
+
 use super::{block_ref::*, byte_index::*, read_write::*, *};
 
 /// `fAMapValid`
@@ -38,8 +40,8 @@ impl From<AmapStatus> for bool {
 }
 
 pub trait Root {
-    type Index: ByteIndex;
-    type BTreeRef: BlockRef;
+    type Index: ByteIndex + Debug;
+    type BTreeRef: BlockRef + Debug;
 
     fn file_eof_index(&self) -> &Self::Index;
     fn amap_last_index(&self) -> &Self::Index;

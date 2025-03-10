@@ -8,8 +8,20 @@ mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    let pst = UnicodePstFile::read(&args.file).unwrap();
-    let header = pst.header();
+
+    if let Ok(pst) = UnicodePstFile::read(&args.file) {
+        let header = pst.header();
+        read_header(header);
+    } else {
+        let pst = AnsiPstFile::read(&args.file)?;
+        let header = pst.header();
+        read_header(header);
+    }
+
+    Ok(())
+}
+
+fn read_header(header: &impl Header) {
     let version = header.version();
 
     println!("File Version: {version:?}");
@@ -30,6 +42,4 @@ fn main() -> anyhow::Result<()> {
     println!("NBT BlockRef: {node_btree:?}");
     println!("BBT BlockRef: {block_btree:?}");
     println!("AMAP Valid: {amap_is_valid:?}");
-
-    Ok(())
 }

@@ -7,7 +7,13 @@ pub fn decode_subject(value: &PropertyValue) -> Option<String> {
                 Some(1) => 2,
                 _ => 0,
             };
-            Some(String::from_utf8_lossy(&value.buffer()[offset..]).to_string())
+            let buffer: Vec<_> = value
+                .buffer()
+                .iter()
+                .skip(offset)
+                .map(|&b| u16::from(b))
+                .collect();
+            Some(String::from_utf16_lossy(&buffer))
         }
         PropertyValue::Unicode(value) => {
             let offset = match value.buffer().first() {
@@ -22,7 +28,10 @@ pub fn decode_subject(value: &PropertyValue) -> Option<String> {
 
 pub fn decode_html_body(buffer: &[u8], code_page: u16) -> Option<String> {
     match code_page {
-        20127 => Some(String::from_utf8_lossy(buffer).to_string()),
+        20127 => {
+            let buffer: Vec<_> = buffer.iter().map(|&b| u16::from(b)).collect();
+            Some(String::from_utf16_lossy(&buffer))
+        }
         _ => {
             let coding = codepage_strings::Coding::new(code_page).ok()?;
             Some(coding.decode(buffer).ok()?.to_string())

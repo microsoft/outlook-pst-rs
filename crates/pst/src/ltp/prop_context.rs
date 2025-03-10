@@ -207,7 +207,8 @@ impl String8Value {
 
 impl Display for String8Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let value = String::from_utf8_lossy(&self.buffer);
+        let buffer: Vec<_> = self.buffer.iter().map(|&b| u16::from(b)).collect();
+        let value = String::from_utf16_lossy(&buffer);
         write!(f, "{value}")
     }
 }

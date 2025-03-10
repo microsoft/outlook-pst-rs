@@ -8,17 +8,31 @@ mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    let pst = UnicodePstFile::read(&args.file).unwrap();
-    let density_list = pst.density_list();
+    if let Ok(pst) = UnicodePstFile::read(&args.file) {
+        let density_list = pst.density_list();
+        match density_list {
+            Ok(density_list) => read_density_list(density_list),
+            Err(err) => {
+                println!("Error: {err:?}");
+                return Ok(());
+            }
+        };
+    } else {
+        let pst = AnsiPstFile::read(&args.file)?;
+        let density_list = pst.density_list();
+        match density_list {
+            Ok(density_list) => read_density_list(density_list),
+            Err(err) => {
+                println!("Error: {err:?}");
+                return Ok(());
+            }
+        };
+    }
 
-    let density_list = match density_list {
-        Ok(density_list) => density_list,
-        Err(err) => {
-            println!("Error: {err:?}");
-            return Ok(());
-        }
-    };
+    Ok(())
+}
 
+fn read_density_list(density_list: &impl DensityListPage) {
     let backfill_complete = density_list.backfill_complete();
     let current_page = density_list.current_page();
     let entries = density_list.entries();
@@ -38,6 +52,4 @@ fn main() -> anyhow::Result<()> {
     println!("Page Signature: 0x{signature:0x}");
     println!("Page CRC: 0x{crc:08x}");
     println!("Block ID: {block_id:?}");
-
-    Ok(())
 }
