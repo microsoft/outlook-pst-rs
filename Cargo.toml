@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/compressed-rtf",
     "crates/pst",
 ]
 resolver = "2"
