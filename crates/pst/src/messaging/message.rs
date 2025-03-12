@@ -426,8 +426,9 @@ impl<'a> AnsiMessage<'a> {
             });
             let recipient_table = match (recipient_table_nodes.next(), recipient_table_nodes.next())
             {
+                (None, None) => Err(MessagingError::MessageRecipientTableNotFound.into()),
                 (Some(node), None) => AnsiTableContext::read(file, encoding, &block_btree, node),
-                _ => Err(MessagingError::MessageRecipientTableNotFound.into()),
+                _ => Err(MessagingError::MultipleMessageRecipientTables.into()),
             }?;
 
             let mut attachment_table_nodes = sub_nodes.iter().filter_map(|(node_id, entry)| {
