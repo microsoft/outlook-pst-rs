@@ -1,3 +1,4 @@
+use compressed_rtf::*;
 use outlook_pst::ltp::prop_context::PropertyValue;
 
 pub fn decode_subject(value: &PropertyValue) -> Option<String> {
@@ -37,4 +38,8 @@ pub fn decode_html_body(buffer: &[u8], code_page: u16) -> Option<String> {
             Some(coding.decode(buffer).ok()?.to_string())
         }
     }
+}
+
+pub fn decode_rtf_compressed(buffer: &[u8]) -> Option<String> {
+    decompress_rtf(buffer).ok()
 }

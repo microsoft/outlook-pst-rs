@@ -960,11 +960,14 @@ impl AnsiTableContext {
         let cursor = heap.find_entry(header.user_root(), f, encoding, block_btree)?;
         let context = TableContextInfo::read(&mut cursor.as_slice())?;
 
-        let row_matrix = if let Some(rows) = context.rows {
+        let rows = if let Some(rows) = context.rows {
             match rows.id_type() {
-                Ok(NodeIdType::HeapNode) => {
-                    heap.find_entry(HeapId::from(u32::from(rows)), f, encoding, block_btree)?
-                }
+                Ok(NodeIdType::HeapNode) => vec![heap.find_entry(
+                    HeapId::from(u32::from(rows)),
+                    f,
+                    encoding,
+                    block_btree,
+                )?],
                 _ => {
                     let sub_node = node
                         .sub_node()
@@ -975,23 +978,27 @@ impl AnsiTableContext {
                     let block = block_btree.find_entry(f, u32::from(block))?;
                     let data_tree = AnsiDataTree::read(f, encoding, &block)?;
                     let blocks: Vec<_> = data_tree.blocks(f, encoding, block_btree)?.collect();
-                    blocks
-                        .iter()
-                        .flat_map(|block| block.data())
-                        .copied()
-                        .collect()
+                    blocks.iter().map(|block| block.data().to_vec()).collect()
                 }
             }
+            .into_iter()
+            .map(|data| {
+                let row_count = data.len() / context.end_existence_bitmap() as usize;
+                let mut cursor = Cursor::new(data);
+                let mut rows = Vec::with_capacity(row_count);
+                for _ in 0..row_count {
+                    let row = TableRowData::read(&mut cursor, &context)?;
+                    rows.push(row);
+                }
+                Ok(rows)
+            })
+            .collect::<io::Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect()
         } else {
             Default::default()
         };
-        let row_count = row_matrix.len() / context.end_existence_bitmap() as usize;
-        let mut cursor = Cursor::new(&row_matrix);
-        let mut rows = Vec::with_capacity(row_count);
-        for _ in 0..row_count {
-            let row = TableRowData::read(&mut cursor, &context)?;
-            rows.push(row);
-        }
 
         let row_index_tree = AnsiHeapTree::new(heap, context.row_index);
         let row_index = row_index_tree

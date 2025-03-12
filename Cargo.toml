@@ -5,6 +5,9 @@ members = [
 ]
 resolver = "2"
 
+[patch.crates-io]
+compressed-rtf = { path = "crates/compressed-rtf" }
+
 [workspace.package]
 authors = [ "Microsoft" ]
 edition = "2021"
@@ -15,6 +18,8 @@ keywords = [ "win32", "outlook", "mapi" ]
 categories = [ "os::windows-apis" ]
 
 [workspace.dependencies]
+compressed-rtf = "1"
+
 anyhow = "1"
 byteorder = "1"
 clap = { version = "4", features = ["derive"] }

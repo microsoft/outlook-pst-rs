@@ -644,18 +644,34 @@ where
                         _ => None,
                     })
                     .or_else(|| {
-                        message.properties().get(0x1013).and_then(|value| {
-                            match (value, message.properties().get(0x3FDE)) {
-                                (
-                                    PropertyValue::Binary(value),
-                                    Some(PropertyValue::Integer32(cpid)),
-                                ) => {
-                                    let code_page = u16::try_from(*cpid).ok()?;
-                                    encoding::decode_html_body(value.buffer(), code_page)
+                        message
+                            .properties()
+                            .get(0x1013)
+                            .and_then(|value| match value {
+                                PropertyValue::Binary(value) => {
+                                    match message.properties().get(0x3FDE) {
+                                        Some(PropertyValue::Integer32(cpid)) => {
+                                            let code_page = u16::try_from(*cpid).ok()?;
+                                            encoding::decode_html_body(value.buffer(), code_page)
+                                        }
+                                        _ => None,
+                                    }
+                                }
+                                PropertyValue::String8(value) => Some(value.to_string()),
+                                PropertyValue::Unicode(value) => Some(value.to_string()),
+                                _ => None,
+                            })
+                    })
+                    .or_else(|| {
+                        message
+                            .properties()
+                            .get(0x1009)
+                            .and_then(|value| match value {
+                                PropertyValue::Binary(value) => {
+                                    encoding::decode_rtf_compressed(value.buffer())
                                 }
                                 _ => None,
-                            }
-                        })
+                            })
                     })
             })
             .unwrap_or_else(|| "Hello, World!".to_string());

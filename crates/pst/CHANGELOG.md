@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/microsoft/outlook-pst-rs/compare/outlook-pst-v0.1.1...outlook-pst-v0.1.2) - 2025-03-12
+
+### Fixed
+- distinguish between missing and too many  recipient table errors
+- truncate string values at null terminators
+- port row matrix fix to AnsiTableContext
+
+### Other
+- use compressed-rtf in browse examples
+
 ## [0.1.1](https://github.com/microsoft/outlook-pst-rs/compare/v0.1.0...v0.1.1) - 2025-03-10
 
 ### Fixed
