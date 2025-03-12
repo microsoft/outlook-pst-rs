@@ -19,5 +19,6 @@ thiserror.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 codepage-strings.workspace = true
+compressed-rtf.workspace = true
 crossterm.workspace = true
 ratatui.workspace = true
