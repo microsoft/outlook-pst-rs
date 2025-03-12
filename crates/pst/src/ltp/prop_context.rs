@@ -492,12 +492,18 @@ impl PropertyValueReadWrite for PropertyValue {
             PropertyType::String8 => {
                 let mut buffer = Vec::new();
                 f.read_to_end(&mut buffer)?;
+                if let Some(end) = buffer.iter().position(|&b| b == 0) {
+                    buffer.truncate(end);
+                }
                 Ok(Self::String8(String8Value { buffer }))
             }
 
             PropertyType::Unicode => {
                 let mut buffer = Vec::new();
                 while let Ok(ch) = f.read_u16::<LittleEndian>() {
+                    if ch == 0 {
+                        break;
+                    }
                     buffer.push(ch);
                 }
                 Ok(Self::Unicode(UnicodeValue { buffer }))
@@ -609,7 +615,7 @@ impl PropertyValueReadWrite for PropertyValue {
                         return Err(LtpError::InvalidMultiValuePropertyOffset(next).into());
                     }
 
-                    let buffer = if i < offsets.len() - 1 {
+                    let mut buffer = if i < offsets.len() - 1 {
                         let next = offsets[i + 1];
                         if next <= start {
                             return Err(LtpError::InvalidMultiValuePropertyOffset(next).into());
@@ -624,6 +630,10 @@ impl PropertyValueReadWrite for PropertyValue {
                         f.read_to_end(&mut buffer)?;
                         buffer
                     };
+
+                    if let Some(end) = buffer.iter().position(|&b| b == 0) {
+                        buffer.truncate(end);
+                    }
 
                     values.push(String8Value { buffer });
                 }
@@ -659,11 +669,17 @@ impl PropertyValueReadWrite for PropertyValue {
 
                         while start < next {
                             let ch = f.read_u16::<LittleEndian>()?;
+                            if ch == 0 {
+                                break;
+                            }
                             buffer.push(ch);
                             start += mem::size_of::<u16>();
                         }
                     } else {
                         while let Ok(ch) = f.read_u16::<LittleEndian>() {
+                            if ch == 0 {
+                                break;
+                            }
                             buffer.push(ch);
                         }
                     };
@@ -1067,6 +1083,10 @@ impl AnsiPropertyContext {
     ) -> io::Result<PropertyValue> {
         match value.value() {
             PropertyValueRecord::Heap(heap_id) => {
+                if u32::from(heap_id) == 0 {
+                    return Ok(PropertyValue::Null);
+                }
+
                 let data = self
                     .tree
                     .heap()
