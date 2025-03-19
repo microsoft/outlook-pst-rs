@@ -20,6 +20,7 @@ use crate::{
         },
         root::Root,
     },
+    PstFile,
 };
 
 #[derive(Default, Debug)]

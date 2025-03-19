@@ -32,7 +32,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn read_density_list(density_list: &impl DensityListPage) {
+fn read_density_list<T: PageTrailer>(density_list: &dyn DensityListPage<Trailer = T>) {
     let backfill_complete = density_list.backfill_complete();
     let current_page = density_list.current_page();
     let entries = density_list.entries();

@@ -27,7 +27,7 @@ use crate::{
         read_write::NodeIdReadWrite,
         root::Root,
     },
-    AnsiPstFile, UnicodePstFile,
+    AnsiPstFile, PstFile, UnicodePstFile,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]

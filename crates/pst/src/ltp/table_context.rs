@@ -470,6 +470,8 @@ impl UnicodeTableRowIndex {
     }
 }
 
+impl TableRowIndex for UnicodeTableRowIndex {}
+
 impl From<UnicodeTableRowIndex> for u32 {
     fn from(value: UnicodeTableRowIndex) -> Self {
         value.index
@@ -501,6 +503,8 @@ impl AnsiTableRowIndex {
         Self { index }
     }
 }
+
+impl TableRowIndex for AnsiTableRowIndex {}
 
 impl From<AnsiTableRowIndex> for u32 {
     fn from(value: AnsiTableRowIndex) -> Self {

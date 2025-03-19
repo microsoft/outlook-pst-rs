@@ -27,6 +27,7 @@ use crate::{
         },
         root::Root,
     },
+    PstFile,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
