@@ -16,8 +16,7 @@ use crate::{
         header::Header,
         node_id::{NodeId, NodeIdType},
         page::{
-            AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, RootBTree, UnicodeBlockBTree,
-            UnicodeNodeBTree,
+            AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, UnicodeBlockBTree, UnicodeNodeBTree,
         },
         root::Root,
     },
@@ -128,7 +127,7 @@ impl<'a> UnicodeFolder<'a> {
 
         let (properties, hierarchy_table, contents_table, associated_table) = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -234,7 +233,7 @@ impl<'a> AnsiFolder<'a> {
 
         let (properties, hierarchy_table, contents_table, associated_table) = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;

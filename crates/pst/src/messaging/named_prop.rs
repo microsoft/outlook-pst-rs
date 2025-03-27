@@ -22,8 +22,7 @@ use crate::{
         header::Header,
         node_id::NID_NAME_TO_ID_MAP,
         page::{
-            AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, RootBTree, UnicodeBlockBTree,
-            UnicodeNodeBTree,
+            AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, UnicodeBlockBTree, UnicodeNodeBTree,
         },
         root::Root,
     },
@@ -473,7 +472,7 @@ impl<'a> UnicodeNamedPropertyMap<'a> {
 
         let properties = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -527,7 +526,7 @@ impl<'a> AnsiNamedPropertyMap<'a> {
 
         let properties = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;

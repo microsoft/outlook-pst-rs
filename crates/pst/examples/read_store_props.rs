@@ -9,7 +9,7 @@ mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    if let Ok(pst) = UnicodePstFile::read(&args.file) {
+    if let Ok(pst) = UnicodePstFile::open(&args.file) {
         let store = UnicodeStore::read(&pst).unwrap();
         let properties = store.properties();
         read_store_props(&properties)

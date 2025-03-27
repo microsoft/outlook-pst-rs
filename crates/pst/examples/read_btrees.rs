@@ -10,32 +10,36 @@ use outlook_pst::{
         header::{Header, NdbCryptMethod},
         node_id::NodeId,
         page::{
-            BTreeEntry, BTreePage, BTreePageEntry, BlockBTreeEntry, NodeBTreeEntry, RootBTree,
+            BTreeEntry, BTreePage, BTreePageEntry, BlockBTreeEntry, NodeBTreeEntry,
             UnicodeBlockBTree, UnicodeNodeBTree,
         },
         root::Root,
     },
     *,
 };
-use std::{fs::File, io, iter};
+use std::{
+    io::{self, Read, Seek},
+    iter,
+};
 
 mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    let pst = UnicodePstFile::read(&args.file).unwrap();
+    let pst = UnicodePstFile::open(&args.file).unwrap();
     let header = pst.header();
     let root = header.root();
 
     {
-        let mut file = pst.file().lock().unwrap();
+        let mut file = pst.reader().lock().unwrap();
+        let file = &mut *file;
 
-        output_block_btree(&mut file, None, *root.block_btree())?;
+        output_block_btree(file, None, *root.block_btree())?;
         println!();
 
-        let block_btree = UnicodeBlockBTree::read(&mut *file, *root.block_btree())?;
+        let block_btree = UnicodeBlockBTree::read(file, *root.block_btree())?;
         output_node_btree(
-            &mut file,
+            file,
             header.crypt_method(),
             None,
             &block_btree,
@@ -46,8 +50,8 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn output_data_tree(
-    file: &mut File,
+fn output_data_tree<R: Read + Seek>(
+    file: &mut R,
     encoding: NdbCryptMethod,
     indent: &str,
     max_level: Option<u8>,
@@ -105,8 +109,8 @@ fn output_data_tree(
     Ok(())
 }
 
-fn output_sub_node_tree(
-    file: &mut File,
+fn output_sub_node_tree<R: Read + Seek>(
+    file: &mut R,
     encoding: NdbCryptMethod,
     indent: &str,
     max_level: Option<u8>,
@@ -190,8 +194,8 @@ fn output_sub_node_tree(
     Ok(())
 }
 
-fn output_node_btree(
-    file: &mut File,
+fn output_node_btree<R: Read + Seek>(
+    file: &mut R,
     encoding: NdbCryptMethod,
     max_level: Option<u8>,
     block_btree: &UnicodeBlockBTree,
@@ -199,7 +203,7 @@ fn output_node_btree(
 ) -> io::Result<()> {
     let node_btree = UnicodeNodeBTree::read(&mut *file, node_btree)?;
     match node_btree {
-        UnicodeNodeBTree::Intermediate(page) => {
+        UnicodeNodeBTree::Intermediate(page, ..) => {
             let level = page.level();
             let entries = page.entries();
 
@@ -224,7 +228,7 @@ fn output_node_btree(
                 output_node_btree(file, encoding, max_level, block_btree, entry.block())?;
             }
         }
-        UnicodeNodeBTree::Leaf(page, _) => {
+        UnicodeNodeBTree::Leaf(page) => {
             assert_eq!(page.level(), 0);
             let entries = page.entries();
 
@@ -258,14 +262,14 @@ fn output_node_btree(
     Ok(())
 }
 
-fn output_block_btree(
-    file: &mut File,
+fn output_block_btree<R: Read + Seek>(
+    file: &mut R,
     max_level: Option<u8>,
     block_btree: UnicodeBlockRef,
 ) -> io::Result<()> {
     let block_btree = UnicodeBlockBTree::read(&mut *file, block_btree)?;
     match block_btree {
-        UnicodeBlockBTree::Intermediate(page) => {
+        UnicodeBlockBTree::Intermediate(page, ..) => {
             let level = page.level();
             let entries = page.entries();
 
@@ -286,7 +290,7 @@ fn output_block_btree(
                 output_block_btree(file, max_level, entry.block())?;
             }
         }
-        UnicodeBlockBTree::Leaf(page, _) => {
+        UnicodeBlockBTree::Leaf(page) => {
             assert_eq!(page.level(), 0);
             let entries = page.entries();
 

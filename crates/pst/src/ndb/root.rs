@@ -2,7 +2,7 @@
 
 use std::fmt::Debug;
 
-use super::{block_ref::*, byte_index::*, read_write::*, *};
+use super::{block_id::*, block_ref::*, byte_index::*, read_write::*, *};
 
 /// `fAMapValid`
 ///
@@ -39,19 +39,23 @@ impl From<AmapStatus> for bool {
     }
 }
 
-pub trait Root {
-    type Index: ByteIndex + Debug;
+pub trait Root
+where
+    u64: From<<<<Self as Root>::BTreeRef as BlockRef>::Block as BlockId>::Index>
+        + From<<<<Self as Root>::BTreeRef as BlockRef>::Index as ByteIndex>::Index>,
+{
     type BTreeRef: BlockRef + Debug;
 
-    fn file_eof_index(&self) -> &Self::Index;
-    fn amap_last_index(&self) -> &Self::Index;
-    fn amap_free_size(&self) -> &Self::Index;
-    fn pmap_free_size(&self) -> &Self::Index;
+    fn file_eof_index(&self) -> &<Self::BTreeRef as BlockRef>::Index;
+    fn amap_last_index(&self) -> &<Self::BTreeRef as BlockRef>::Index;
+    fn amap_free_size(&self) -> &<Self::BTreeRef as BlockRef>::Index;
+    fn pmap_free_size(&self) -> &<Self::BTreeRef as BlockRef>::Index;
     fn node_btree(&self) -> &Self::BTreeRef;
     fn block_btree(&self) -> &Self::BTreeRef;
     fn amap_is_valid(&self) -> AmapStatus;
 }
 
+#[derive(Clone, Debug)]
 pub struct UnicodeRoot {
     reserved1: u32,
     file_eof_index: UnicodeByteIndex,
@@ -91,7 +95,6 @@ impl UnicodeRoot {
 }
 
 impl Root for UnicodeRoot {
-    type Index = UnicodeByteIndex;
     type BTreeRef = UnicodeBlockRef;
 
     fn file_eof_index(&self) -> &UnicodeByteIndex {
@@ -161,8 +164,19 @@ impl RootReadWrite for UnicodeRoot {
     fn reserved3(&self) -> u16 {
         self.reserved3
     }
+
+    fn set_amap_status(&mut self, status: AmapStatus) {
+        self.amap_is_valid = status;
+    }
+
+    fn reset_free_size(&mut self, free_bytes: u64) -> NdbResult<()> {
+        self.amap_free_size = UnicodeByteIndex::from(free_bytes);
+        self.pmap_free_size = UnicodeByteIndex::from(0);
+        Ok(())
+    }
 }
 
+#[derive(Clone, Debug)]
 pub struct AnsiRoot {
     file_eof_index: AnsiByteIndex,
     amap_last_index: AnsiByteIndex,
@@ -202,7 +216,6 @@ impl AnsiRoot {
 }
 
 impl Root for AnsiRoot {
-    type Index = AnsiByteIndex;
     type BTreeRef = AnsiBlockRef;
 
     fn file_eof_index(&self) -> &AnsiByteIndex {
@@ -271,5 +284,17 @@ impl RootReadWrite for AnsiRoot {
 
     fn reserved3(&self) -> u16 {
         self.reserved3
+    }
+
+    fn set_amap_status(&mut self, status: AmapStatus) {
+        self.amap_is_valid = status;
+    }
+
+    fn reset_free_size(&mut self, free_bytes: u64) -> NdbResult<()> {
+        let free_bytes =
+            u32::try_from(free_bytes).map_err(|_| NdbError::InvalidAnsiFreeSpace(free_bytes))?;
+        self.amap_free_size = AnsiByteIndex::from(free_bytes);
+        self.pmap_free_size = AnsiByteIndex::from(0);
+        Ok(())
     }
 }

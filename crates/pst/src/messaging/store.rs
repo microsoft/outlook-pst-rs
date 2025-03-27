@@ -20,10 +20,7 @@ use crate::{
         block::{AnsiDataTree, UnicodeDataTree},
         header::Header,
         node_id::{NodeId, NodeIdType, NID_MESSAGE_STORE, NID_ROOT_FOLDER},
-        page::{
-            AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, RootBTree, UnicodeBlockBTree,
-            UnicodeNodeBTree,
-        },
+        page::*,
         read_write::NodeIdReadWrite,
         root::Root,
     },
@@ -264,7 +261,7 @@ impl<'a> UnicodeStore<'a> {
 
         let (node_btree, block_btree, properties) = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -314,7 +311,7 @@ impl<'a> UnicodeStore<'a> {
         let hierarchy_table = {
             let mut file = self
                 .pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -338,7 +335,7 @@ impl<'a> UnicodeStore<'a> {
     ) -> io::Result<PropertyValue> {
         let mut file = self
             .pst
-            .file()
+            .reader()
             .lock()
             .map_err(|_| MessagingError::FailedToLockFile)?;
         let file = &mut *file;
@@ -376,7 +373,7 @@ impl<'a> AnsiStore<'a> {
 
         let (node_btree, block_btree, properties) = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -426,7 +423,7 @@ impl<'a> AnsiStore<'a> {
         let hierarchy_table = {
             let mut file = self
                 .pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -450,7 +447,7 @@ impl<'a> AnsiStore<'a> {
     ) -> io::Result<PropertyValue> {
         let mut file = self
             .pst
-            .file()
+            .reader()
             .lock()
             .map_err(|_| MessagingError::FailedToLockFile)?;
         let file = &mut *file;

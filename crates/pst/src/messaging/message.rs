@@ -19,8 +19,8 @@ use crate::{
         header::Header,
         node_id::{NodeId, NodeIdType},
         page::{
-            AnsiBlockBTree, AnsiNodeBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, RootBTree,
-            UnicodeBlockBTree, UnicodeNodeBTree, UnicodeNodeBTreeEntry,
+            AnsiBlockBTree, AnsiNodeBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, UnicodeBlockBTree,
+            UnicodeNodeBTree, UnicodeNodeBTreeEntry,
         },
         root::Root,
     },
@@ -175,7 +175,7 @@ impl<'a> UnicodeMessage<'a> {
 
         let node = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -199,7 +199,7 @@ impl<'a> UnicodeMessage<'a> {
 
         let (properties, sub_nodes, recipient_table, attachment_table) = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -349,7 +349,7 @@ impl<'a> AnsiMessage<'a> {
 
         let node = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -373,7 +373,7 @@ impl<'a> AnsiMessage<'a> {
 
         let (properties, sub_nodes, recipient_table, attachment_table) = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;

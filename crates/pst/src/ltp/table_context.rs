@@ -13,7 +13,7 @@ use crate::ndb::{
     header::NdbCryptMethod,
     node_id::{NodeId, NodeIdType},
     page::{
-        AnsiBlockBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, RootBTree, UnicodeBlockBTree,
+        AnsiBlockBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, UnicodeBlockBTree,
         UnicodeNodeBTreeEntry,
     },
     read_write::NodeIdReadWrite,
@@ -457,7 +457,11 @@ impl HeapNodeReadWrite for TableRowId {
     }
 }
 
-pub trait TableRowIndex: HeapTreeEntryValue + Copy + Into<u32> {}
+pub trait TableRowIndex: HeapTreeEntryValue + Copy
+where
+    u32: From<Self>,
+{
+}
 
 #[derive(Clone, Copy, Default, Debug)]
 pub struct UnicodeTableRowIndex {

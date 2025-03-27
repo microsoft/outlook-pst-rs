@@ -14,7 +14,7 @@ use crate::ndb::{
     header::NdbCryptMethod,
     node_id::{NodeId, NodeIdType},
     page::{
-        AnsiBlockBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, RootBTree, UnicodeBlockBTree,
+        AnsiBlockBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, UnicodeBlockBTree,
         UnicodeNodeBTreeEntry,
     },
     read_write::NodeIdReadWrite,

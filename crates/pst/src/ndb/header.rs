@@ -3,7 +3,7 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
-use super::{block_id::*, read_write::*, root::*, *};
+use super::{block_id::*, block_ref::*, byte_index::*, read_write::*, root::*, *};
 use crate::crc::compute_crc;
 
 /// `dwMagic`
@@ -106,7 +106,11 @@ impl TryFrom<u8> for NdbCryptMethod {
     }
 }
 
-pub trait Header {
+pub trait Header: Clone
+where
+    u64: From<<<<Self::Root as Root>::BTreeRef as BlockRef>::Block as BlockId>::Index>
+        + From<<<<Self::Root as Root>::BTreeRef as BlockRef>::Index as ByteIndex>::Index>,
+{
     type Root: Root;
 
     fn version(&self) -> NdbVersion;
@@ -115,6 +119,7 @@ pub trait Header {
     fn root_mut(&mut self) -> &mut Self::Root;
 }
 
+#[derive(Clone, Debug)]
 pub struct UnicodeHeader {
     next_page: UnicodeBlockId,
     unique: u32,
@@ -367,8 +372,13 @@ impl HeaderReadWrite for UnicodeHeader {
         // rgbReserved2, bReserved, rgbReserved3 (total 36 bytes)
         f.write_all(&self.reserved3)
     }
+
+    fn update_unique(&mut self) {
+        self.unique = self.unique.wrapping_add(1);
+    }
 }
 
+#[derive(Clone, Debug)]
 pub struct AnsiHeader {
     next_block: AnsiBlockId,
     next_page: AnsiBlockId,
@@ -588,6 +598,10 @@ impl HeaderReadWrite for AnsiHeader {
         f.write_u32::<LittleEndian>(crc_partial)?;
 
         f.write_all(&crc_data)
+    }
+
+    fn update_unique(&mut self) {
+        self.unique = self.unique.wrapping_add(1);
     }
 }
 

@@ -8,8 +8,11 @@ use std::{
 
 use super::read_write::*;
 
-pub trait ByteIndex {
-    type Index: Copy + Sized + Into<u64>;
+pub trait ByteIndex
+where
+    u64: From<Self::Index>,
+{
+    type Index: Copy + Sized;
 
     fn index(&self) -> Self::Index;
 }

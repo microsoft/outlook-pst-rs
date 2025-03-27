@@ -1,27 +1,34 @@
 use clap::Parser;
 use outlook_pst::{
-    ndb::{header::Header, root::Root},
+    ndb::{block_id::BlockId, byte_index::ByteIndex, header::Header, root::Root},
     *,
 };
+use std::fmt::Debug;
 
 mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
 
-    if let Ok(pst) = UnicodePstFile::read(&args.file) {
-        let header = pst.header();
-        read_header(header);
+    if let Ok(pst) = UnicodePstFile::open(&args.file) {
+        read_header(&pst);
     } else {
         let pst = AnsiPstFile::read(&args.file)?;
-        let header = pst.header();
-        read_header(header);
+        read_header(&pst);
     }
 
     Ok(())
 }
 
-fn read_header(header: &impl Header) {
+fn read_header<Pst>(pst: &Pst)
+where
+    Pst: PstFile,
+    <Pst as PstFile>::ByteIndex: Debug,
+    <Pst as PstFile>::BlockRef: Debug,
+    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
+        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
+{
+    let header = pst.header();
     let version = header.version();
 
     println!("File Version: {version:?}");

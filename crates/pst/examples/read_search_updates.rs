@@ -4,7 +4,7 @@ use outlook_pst::{
     ndb::{
         header::Header,
         node_id::NID_SEARCH_MANAGEMENT_QUEUE,
-        page::{RootBTree, UnicodeBlockBTree, UnicodeNodeBTree},
+        page::{UnicodeBlockBTree, UnicodeNodeBTree},
         root::Root,
     },
     *,
@@ -14,12 +14,12 @@ mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    let pst = UnicodePstFile::read(&args.file).unwrap();
+    let pst = UnicodePstFile::open(&args.file).unwrap();
     let header = pst.header();
     let root = header.root();
 
     let updates = {
-        let mut file = pst.file().lock().unwrap();
+        let mut file = pst.reader().lock().unwrap();
         let file = &mut *file;
 
         let node_btree = UnicodeNodeBTree::read(file, *root.node_btree())?;

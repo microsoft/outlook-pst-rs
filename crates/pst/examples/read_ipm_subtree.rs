@@ -8,7 +8,7 @@ mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    let pst = UnicodePstFile::read(&args.file).unwrap();
+    let pst = UnicodePstFile::open(&args.file).unwrap();
     let store = UnicodeStore::read(&pst).unwrap();
     let ipm_sub_tree = store.properties().ipm_sub_tree_entry_id()?;
     let folder = UnicodeFolder::read(&store, &ipm_sub_tree)?;
