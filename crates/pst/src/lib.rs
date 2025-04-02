@@ -378,6 +378,7 @@ where
                 <Self::BlockBTree as RootBTreeReadWrite>::read(reader, *root.block_btree())?;
 
             self.mark_node_btree_allocations(reader, &node_btree, &block_btree, &mut amap_pages)?;
+            self.mark_block_btree_allocations(reader, &block_btree, &mut amap_pages)?;
         }
 
         let free_bytes = amap_pages.iter().map(|page| page.free_space).sum();
@@ -555,6 +556,46 @@ where
         Ok(())
     }
 
+    fn mark_block_btree_allocations<R: Read + Seek>(
+        &self,
+        reader: &mut R,
+        block_btree: &RootBTreePage<
+            Self,
+            <<Self as PstFile>::BlockBTree as RootBTree>::Entry,
+            <<Self as PstFile>::BlockBTree as RootBTree>::IntermediatePage,
+            <<Self as PstFile>::BlockBTree as RootBTree>::LeafPage,
+        >,
+        amap_pages: &mut Vec<AllocationMapPageInfo<Self>>,
+    ) -> io::Result<()> {
+        match block_btree {
+            RootBTreePage::Intermediate(page, ..) => {
+                let block_id = page.trailer().block_id();
+                let index: <<Self as PstFile>::BlockId as BlockId>::Index = block_id.into();
+                Self::mark_page_allocation(u64::from(index), amap_pages)?;
+
+                for entry in page.entries() {
+                    let block_btree =
+                        <Self::BlockBTree as RootBTreeReadWrite>::read(reader, entry.block())?;
+                    self.mark_block_btree_allocations(reader, &block_btree, amap_pages)?;
+                }
+            }
+            RootBTreePage::Leaf(page) => {
+                let block_id = page.trailer().block_id();
+                let index: <<Self as PstFile>::BlockId as BlockId>::Index = block_id.into();
+                Self::mark_page_allocation(u64::from(index), amap_pages)?;
+
+                for entry in page.entries() {
+                    Self::mark_block_allocation(
+                        u64::from(entry.block().index().index()),
+                        entry.size(),
+                        amap_pages,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn mark_page_allocation(
         index: u64,
         amap_pages: &mut Vec<AllocationMapPageInfo<Self>>,
@@ -580,6 +621,66 @@ where
             let mask = 0x00FF_u16 << bit_index;
             bytes[byte_index] |= (mask & 0xFF) as u8;
             bytes[byte_index + 1] |= ((mask >> 8) & 0xFF) as u8;
+        }
+
+        Ok(())
+    }
+
+    fn mark_block_allocation(
+        index: u64,
+        size: u16,
+        amap_pages: &mut Vec<AllocationMapPageInfo<Self>>,
+    ) -> io::Result<()> {
+        let index = u64::from(index) - AMAP_FIRST_OFFSET;
+        let amap_index =
+            usize::try_from(index / AMAP_DATA_SIZE).map_err(|_| PstError::IntegerConversion)?;
+        let entry = amap_pages
+            .get_mut(amap_index)
+            .ok_or(PstError::AllocationMapPageNotFound(amap_index))?;
+        let size = u64::from(block_size(size));
+        entry.free_space -= size;
+
+        let bytes = entry.amap_page.map_bits_mut();
+
+        let bit_start = usize::try_from((index % AMAP_DATA_SIZE) / 64)
+            .map_err(|_| PstError::IntegerConversion)?;
+        let bit_end =
+            bit_start + usize::try_from(size / 64).map_err(|_| PstError::IntegerConversion)?;
+        let byte_start = bit_start / 8;
+        let bit_start = bit_start % 8;
+        let byte_end = bit_end / 8;
+        let bit_end = bit_end % 8;
+
+        if byte_start == byte_end {
+            // The allocation fits in a single byte
+            if bit_end > bit_start {
+                let mask_start = !((1_u8 << bit_start) - 1);
+                let mask_end = ((1_u16 << bit_end) - 1) as u8;
+                let mask = mask_start & mask_end;
+                bytes[byte_start] |= mask;
+            }
+            return Ok(());
+        }
+
+        let byte_start = if bit_start == 0 {
+            byte_start
+        } else {
+            let mask_start = !((1_u8 << bit_start) - 1);
+            bytes[byte_start] |= mask_start;
+            byte_start + 1
+        };
+
+        let byte_end = if bit_end == 0 {
+            byte_end
+        } else {
+            // Clear the bits in the last byte of the allocation range
+            let mask_end = ((1_u16 << bit_end) - 1) as u8;
+            bytes[byte_end] |= mask_end;
+            byte_end - 1
+        };
+
+        for byte in &mut bytes[byte_start..byte_end] {
+            *byte = 0xFF;
         }
 
         Ok(())
