@@ -1,7 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 use std::{
-    fs::File,
+    fs::{File, OpenOptions},
     io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     mem,
     path::Path,
@@ -92,7 +92,9 @@ where
     fn header(&self) -> &Self::Header;
     fn header_mut(&mut self) -> &mut Self::Header;
     fn density_list(&self) -> Result<&dyn DensityListPage<Self>, &io::Error>;
-    fn rebuild_allocation_map(&mut self) -> io::Result<()>;
+
+    fn start_write(&mut self) -> io::Result<()>;
+    fn finish_write(&mut self) -> io::Result<()>;
 }
 
 pub struct UnicodePstFile {
@@ -104,7 +106,9 @@ pub struct UnicodePstFile {
 
 impl UnicodePstFile {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
-        let writer = File::create(&path)
+        let writer = OpenOptions::new()
+            .write(true)
+            .open(&path)
             .map(BufWriter::new)
             .map(Mutex::new)
             .map_err(|_| PstError::NoWriteAccess(path.as_ref().display().to_string()));
@@ -162,8 +166,12 @@ impl PstFile for UnicodePstFile {
         self.density_list.as_ref().map(|dl| dl as _)
     }
 
-    fn rebuild_allocation_map(&mut self) -> io::Result<()> {
-        <Self as PstFileReadWrite>::rebuild_allocation_map(self)
+    fn start_write(&mut self) -> io::Result<()> {
+        <Self as PstFileReadWrite>::start_write(self)
+    }
+
+    fn finish_write(&mut self) -> io::Result<()> {
+        <Self as PstFileReadWrite>::finish_write(self)
     }
 }
 
@@ -175,8 +183,10 @@ pub struct AnsiPstFile {
 }
 
 impl AnsiPstFile {
-    pub fn read(path: impl AsRef<Path>) -> io::Result<Self> {
-        let writer = File::create(&path)
+    pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
+        let writer = OpenOptions::new()
+            .write(true)
+            .open(&path)
             .map(BufWriter::new)
             .map(Mutex::new)
             .map_err(|_| PstError::NoWriteAccess(path.as_ref().display().to_string()));
@@ -232,8 +242,12 @@ impl PstFile for AnsiPstFile {
         self.density_list.as_ref().map(|dl| dl as _)
     }
 
-    fn rebuild_allocation_map(&mut self) -> io::Result<()> {
-        <Self as PstFileReadWrite>::rebuild_allocation_map(self)
+    fn start_write(&mut self) -> io::Result<()> {
+        <Self as PstFileReadWrite>::start_write(self)
+    }
+
+    fn finish_write(&mut self) -> io::Result<()> {
+        <Self as PstFileReadWrite>::finish_write(self)
     }
 }
 
@@ -296,6 +310,7 @@ where
             <<Self as PstFile>::BlockBTree as RootBTree>::LeafPage,
         >,
     <<Self as PstFile>::BlockBTree as RootBTree>::LeafPage: RootBTreeLeafPageReadWrite<Self>,
+    <Self as PstFile>::BlockTrailer: BlockTrailerReadWrite,
     <Self as PstFile>::AllocationMapPage: AllocationMapPageReadWrite<Self>,
     <Self as PstFile>::AllocationPageMapPage: AllocationPageMapPageReadWrite<Self>,
     <Self as PstFile>::FreeMapPage: FreeMapPageReadWrite<Self>,
@@ -304,6 +319,47 @@ where
     u64: From<<<Self as PstFile>::BlockId as BlockId>::Index>
         + From<<<Self as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
+    fn start_write(&mut self) -> io::Result<()> {
+        self.rebuild_allocation_map()?;
+
+        let header = {
+            let header = self.header_mut();
+            header.update_unique();
+
+            let root = header.root_mut();
+            root.set_amap_status(AmapStatus::Invalid);
+            header.clone()
+        };
+
+        let mut writer = self
+            .writer()
+            .as_ref()?
+            .lock()
+            .map_err(|_| PstError::LockError)?;
+        let writer = &mut *writer;
+        writer.seek(SeekFrom::Start(0))?;
+        header.write(writer)?;
+        writer.flush()
+    }
+
+    fn finish_write(&mut self) -> io::Result<()> {
+        let header = {
+            let header = self.header_mut();
+            header.update_unique();
+            header.clone()
+        };
+
+        let mut writer = self
+            .writer()
+            .as_ref()?
+            .lock()
+            .map_err(|_| PstError::LockError)?;
+        let writer = &mut *writer;
+        writer.seek(SeekFrom::Start(0))?;
+        header.write(writer)?;
+        writer.flush()
+    }
+
     /// [Crash Recovery and AMap Rebuilding](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/d9bcc1fd-c66a-41b3-b6d7-ed09d2a25ced)
     fn rebuild_allocation_map(&mut self) -> io::Result<()> {
         let header = self.header();
@@ -377,13 +433,24 @@ where
             let block_btree =
                 <Self::BlockBTree as RootBTreeReadWrite>::read(reader, *root.block_btree())?;
 
-            self.mark_node_btree_allocations(reader, &node_btree, &block_btree, &mut amap_pages)?;
-            self.mark_block_btree_allocations(reader, &block_btree, &mut amap_pages)?;
+            self.mark_node_btree_allocations(
+                reader,
+                root.node_btree().index(),
+                &node_btree,
+                &block_btree,
+                &mut amap_pages,
+            )?;
+            self.mark_block_btree_allocations(
+                reader,
+                root.block_btree().index(),
+                &block_btree,
+                &mut amap_pages,
+            )?;
         }
 
         let free_bytes = amap_pages.iter().map(|page| page.free_space).sum();
 
-        let pmap_pages: Vec<_> = (0..(num_amap_pages / 8))
+        let pmap_pages: Vec<_> = (0..=(num_amap_pages / 8))
             .map(|index| {
                 let index =
                     <<<Self as PstFile>::ByteIndex as ByteIndex>::Index as TryFrom<u64>>::try_from(
@@ -426,7 +493,7 @@ where
                     0,
                 );
 
-                let map_bits = [0; mem::size_of::<MapBits>()];
+                let map_bits = [0xFF; mem::size_of::<MapBits>()];
 
                 let fmap_page =
                     <<Self as PstFile>::FreeMapPage as FreeMapPageReadWrite<Self>>::new(
@@ -453,7 +520,7 @@ where
                     0,
                 );
 
-                let map_bits = [0; mem::size_of::<MapBits>()];
+                let map_bits = [0xFF; mem::size_of::<MapBits>()];
 
                 let fmap_page = <<Self as PstFile>::FreePageMapPage as FreePageMapPageReadWrite<
                     Self,
@@ -462,58 +529,61 @@ where
             })
             .collect::<PstResult<Vec<_>>>()?;
 
-        let mut header = header.clone();
-        header.root_mut().reset_free_size(free_bytes)?;
+        {
+            let mut writer = self
+                .writer()
+                .as_ref()?
+                .lock()
+                .map_err(|_| PstError::LockError)?;
+            let writer = &mut *writer;
 
-        let mut writer = self
-            .writer()
-            .as_ref()?
-            .lock()
-            .map_err(|_| PstError::LockError)?;
-        let writer = &mut *writer;
+            for page in amap_pages.into_iter().map(|info| info.amap_page) {
+                let index: <<Self as PstFile>::BlockId as BlockId>::Index =
+                    page.trailer().block_id().into();
+                let index = u64::from(index);
 
-        for page in amap_pages.into_iter().map(|info| info.amap_page) {
-            let index: <<Self as PstFile>::BlockId as BlockId>::Index =
-                page.trailer().block_id().into();
-            let index = u64::from(index);
+                writer.seek(SeekFrom::Start(index))?;
+                <Self::AllocationMapPage as AllocationMapPageReadWrite<Self>>::write(
+                    &page, writer,
+                )?;
+            }
 
-            writer.seek(SeekFrom::Start(index))?;
-            <Self::AllocationMapPage as AllocationMapPageReadWrite<Self>>::write(&page, writer)?;
+            for page in pmap_pages.into_iter() {
+                let index: <<Self as PstFile>::BlockId as BlockId>::Index =
+                    page.trailer().block_id().into();
+                let index = u64::from(index);
+
+                writer.seek(SeekFrom::Start(index))?;
+                <Self::AllocationPageMapPage as AllocationPageMapPageReadWrite<Self>>::write(
+                    &page, writer,
+                )?;
+            }
+
+            for page in fmap_pages.into_iter() {
+                let index: <<Self as PstFile>::BlockId as BlockId>::Index =
+                    page.trailer().block_id().into();
+                let index = u64::from(index);
+
+                writer.seek(SeekFrom::Start(index))?;
+                <Self::FreeMapPage as FreeMapPageReadWrite<Self>>::write(&page, writer)?;
+            }
+
+            for page in fpmap_pages.into_iter() {
+                let index: <<Self as PstFile>::BlockId as BlockId>::Index =
+                    page.trailer().block_id().into();
+                let index = u64::from(index);
+
+                writer.seek(SeekFrom::Start(index))?;
+                <Self::FreePageMapPage as FreePageMapPageReadWrite<Self>>::write(&page, writer)?;
+            }
+
+            writer.flush()?;
         }
 
-        for page in pmap_pages.into_iter() {
-            let index: <<Self as PstFile>::BlockId as BlockId>::Index =
-                page.trailer().block_id().into();
-            let index = u64::from(index);
-
-            writer.seek(SeekFrom::Start(index))?;
-            <Self::AllocationPageMapPage as AllocationPageMapPageReadWrite<Self>>::write(
-                &page, writer,
-            )?;
-        }
-
-        for page in fmap_pages.into_iter() {
-            let index: <<Self as PstFile>::BlockId as BlockId>::Index =
-                page.trailer().block_id().into();
-            let index = u64::from(index);
-
-            writer.seek(SeekFrom::Start(index))?;
-            <Self::FreeMapPage as FreeMapPageReadWrite<Self>>::write(&page, writer)?;
-        }
-
-        for page in fpmap_pages.into_iter() {
-            let index: <<Self as PstFile>::BlockId as BlockId>::Index =
-                page.trailer().block_id().into();
-            let index = u64::from(index);
-
-            writer.seek(SeekFrom::Start(index))?;
-            <Self::FreePageMapPage as FreePageMapPageReadWrite<Self>>::write(&page, writer)?;
-        }
-
-        writer.flush()?;
-
-        header.write(writer)?;
-        writer.flush()?;
+        let header = self.header_mut();
+        let root = header.root_mut();
+        root.reset_free_size(free_bytes)?;
+        root.set_amap_status(AmapStatus::Valid2);
 
         Ok(())
     }
@@ -521,6 +591,7 @@ where
     fn mark_node_btree_allocations<R: Read + Seek>(
         &self,
         reader: &mut R,
+        page_index: Self::ByteIndex,
         node_btree: &RootBTreePage<
             Self,
             <<Self as PstFile>::NodeBTree as RootBTree>::Entry,
@@ -535,30 +606,29 @@ where
         >,
         amap_pages: &mut Vec<AllocationMapPageInfo<Self>>,
     ) -> io::Result<()> {
-        match node_btree {
-            RootBTreePage::Intermediate(page, ..) => {
-                let block_id = page.trailer().block_id();
-                let index: <<Self as PstFile>::BlockId as BlockId>::Index = block_id.into();
-                Self::mark_page_allocation(u64::from(index), amap_pages)?;
+        Self::mark_page_allocation(u64::from(page_index.index()), amap_pages)?;
 
-                for entry in page.entries() {
-                    let node_btree =
-                        <Self::NodeBTree as RootBTreeReadWrite>::read(reader, entry.block())?;
-                    self.mark_node_btree_allocations(reader, &node_btree, block_btree, amap_pages)?;
-                }
-            }
-            RootBTreePage::Leaf(page) => {
-                let block_id = page.trailer().block_id();
-                let index: <<Self as PstFile>::BlockId as BlockId>::Index = block_id.into();
-                Self::mark_page_allocation(u64::from(index), amap_pages)?;
+        if let RootBTreePage::Intermediate(page, ..) = node_btree {
+            for entry in page.entries() {
+                let block = entry.block();
+                let node_btree = <Self::NodeBTree as RootBTreeReadWrite>::read(reader, block)?;
+                self.mark_node_btree_allocations(
+                    reader,
+                    block.index(),
+                    &node_btree,
+                    block_btree,
+                    amap_pages,
+                )?;
             }
         }
+
         Ok(())
     }
 
     fn mark_block_btree_allocations<R: Read + Seek>(
         &self,
         reader: &mut R,
+        page_index: Self::ByteIndex,
         block_btree: &RootBTreePage<
             Self,
             <<Self as PstFile>::BlockBTree as RootBTree>::Entry,
@@ -567,23 +637,22 @@ where
         >,
         amap_pages: &mut Vec<AllocationMapPageInfo<Self>>,
     ) -> io::Result<()> {
+        Self::mark_page_allocation(u64::from(page_index.index()), amap_pages)?;
+
         match block_btree {
             RootBTreePage::Intermediate(page, ..) => {
-                let block_id = page.trailer().block_id();
-                let index: <<Self as PstFile>::BlockId as BlockId>::Index = block_id.into();
-                Self::mark_page_allocation(u64::from(index), amap_pages)?;
-
                 for entry in page.entries() {
                     let block_btree =
                         <Self::BlockBTree as RootBTreeReadWrite>::read(reader, entry.block())?;
-                    self.mark_block_btree_allocations(reader, &block_btree, amap_pages)?;
+                    self.mark_block_btree_allocations(
+                        reader,
+                        entry.block().index(),
+                        &block_btree,
+                        amap_pages,
+                    )?;
                 }
             }
             RootBTreePage::Leaf(page) => {
-                let block_id = page.trailer().block_id();
-                let index: <<Self as PstFile>::BlockId as BlockId>::Index = block_id.into();
-                Self::mark_page_allocation(u64::from(index), amap_pages)?;
-
                 for entry in page.entries() {
                     Self::mark_block_allocation(
                         u64::from(entry.block().index().index()),
@@ -618,9 +687,10 @@ where
         if bit_index == 0 {
             bytes[byte_index] = 0xFF;
         } else {
-            let mask = 0x00FF_u16 << bit_index;
-            bytes[byte_index] |= (mask & 0xFF) as u8;
-            bytes[byte_index + 1] |= ((mask >> 8) & 0xFF) as u8;
+            let mask = 0x80_u8 >> bit_index;
+            let mask = mask | (mask - 1);
+            bytes[byte_index] |= mask;
+            bytes[byte_index + 1] |= !mask;
         }
 
         Ok(())
@@ -637,7 +707,9 @@ where
         let entry = amap_pages
             .get_mut(amap_index)
             .ok_or(PstError::AllocationMapPageNotFound(amap_index))?;
-        let size = u64::from(block_size(size));
+        let size = u64::from(block_size(
+            size + <<Self as PstFile>::BlockTrailer as BlockTrailerReadWrite>::SIZE,
+        ));
         entry.free_space -= size;
 
         let bytes = entry.amap_page.map_bits_mut();
@@ -654,8 +726,10 @@ where
         if byte_start == byte_end {
             // The allocation fits in a single byte
             if bit_end > bit_start {
-                let mask_start = !((1_u8 << bit_start) - 1);
-                let mask_end = ((1_u16 << bit_end) - 1) as u8;
+                let mask_start = 0x80_u8 >> bit_start;
+                let mask_start = mask_start | (mask_start - 1);
+                let mask_end = 0x80_u8 >> bit_end;
+                let mask_end = !(mask_end | (mask_end - 1));
                 let mask = mask_start & mask_end;
                 bytes[byte_start] |= mask;
             }
@@ -665,22 +739,22 @@ where
         let byte_start = if bit_start == 0 {
             byte_start
         } else {
-            let mask_start = !((1_u8 << bit_start) - 1);
+            let mask_start = 0x80_u8 >> bit_start;
+            let mask_start = mask_start | (mask_start - 1);
             bytes[byte_start] |= mask_start;
             byte_start + 1
         };
 
-        let byte_end = if bit_end == 0 {
-            byte_end
-        } else {
-            // Clear the bits in the last byte of the allocation range
-            let mask_end = ((1_u16 << bit_end) - 1) as u8;
+        if bit_end != 0 {
+            let mask_end = 0x80_u8 >> bit_end;
+            let mask_end = !(mask_end | (mask_end - 1));
             bytes[byte_end] |= mask_end;
-            byte_end - 1
         };
 
-        for byte in &mut bytes[byte_start..byte_end] {
-            *byte = 0xFF;
+        if byte_end > byte_start {
+            for byte in &mut bytes[byte_start..byte_end] {
+                *byte = 0xFF;
+            }
         }
 
         Ok(())

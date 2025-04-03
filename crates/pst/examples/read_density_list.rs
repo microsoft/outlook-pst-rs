@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
     if let Ok(pst) = UnicodePstFile::open(&args.file) {
         read_density_list(&pst);
     } else {
-        let pst = AnsiPstFile::read(&args.file)?;
+        let pst = AnsiPstFile::open(&args.file)?;
         read_density_list(&pst);
     }
 

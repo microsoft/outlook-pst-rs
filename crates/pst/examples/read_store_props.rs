@@ -14,7 +14,7 @@ fn main() -> anyhow::Result<()> {
         let properties = store.properties();
         read_store_props(&properties)
     } else {
-        let pst = AnsiPstFile::read(&args.file)?;
+        let pst = AnsiPstFile::open(&args.file)?;
         let store = AnsiStore::read(&pst)?;
         let properties = store.properties();
         read_store_props(&properties)

@@ -691,7 +691,7 @@ where
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    let pst = AnsiPstFile::read(&args.file).unwrap();
+    let pst = AnsiPstFile::open(&args.file).unwrap();
     let ipm_sub_tree = IpmSubTree::new(pst);
 
     let mut terminal = ratatui::init();
