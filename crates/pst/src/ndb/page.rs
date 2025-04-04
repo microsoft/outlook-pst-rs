@@ -6,6 +6,7 @@ use std::{
     fmt::Debug,
     io::{self, Cursor, Read, Seek, SeekFrom, Write},
     marker::PhantomData,
+    ops::Range,
 };
 
 use super::{block_id::*, block_ref::*, byte_index::*, node_id::*, read_write::*, *};
@@ -229,6 +230,59 @@ where
     u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
         + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
+    fn find_free_bits(&self, max_size: u16) -> Range<u16> {
+        let mut max_free_slots = 0..0;
+        let mut current = 0..0;
+
+        for &page in self.map_bits() {
+            if page == 0 {
+                current.end += 8;
+            } else {
+                let leading_zero = (0..8).take_while(|&i| page & (0x80 >> i) == 0).count() as u16;
+                let trailing_zero = (0..8).take_while(|&i| page & (0x01 << i) == 0).count() as u16;
+                assert!(leading_zero + trailing_zero < 8, "leading_zero: {leading_zero}, trailing_zero: {trailing_zero} for page: 0x{page:02X}");
+
+                let page_offset = current.end + 8;
+                current.end += leading_zero;
+
+                if current.len() > max_free_slots.len() {
+                    max_free_slots = current.clone();
+                }
+
+                if (max_free_slots.end - max_free_slots.start + 2)
+                    < (8 - trailing_zero - leading_zero)
+                {
+                    let mut current = page_offset..page_offset;
+                    for i in (leading_zero + 1)..(7 - trailing_zero) {
+                        if page & (0x80 >> i) == 0 {
+                            current.end += 1;
+                        } else {
+                            if current.len() > max_free_slots.len() {
+                                max_free_slots = current.clone();
+                            }
+                            current.start = current.end;
+                        }
+                    }
+
+                    if current.len() > max_free_slots.len() {
+                        max_free_slots = current;
+                    }
+                }
+
+                current = (page_offset - trailing_zero)..page_offset;
+            }
+
+            if current.end - current.start >= max_size {
+                break;
+            }
+        }
+
+        if current.len() > max_free_slots.len() {
+            max_free_slots = current;
+        }
+
+        (max_free_slots.start)..(max_free_slots.end.max(max_free_slots.start + max_size))
+    }
 }
 
 impl<Pst, Page> AllocationMapPage<Pst> for Page
@@ -372,7 +426,9 @@ impl<const PAGE_TYPE: u8> MapPage<AnsiPstFile, PAGE_TYPE> for AnsiMapPage<PAGE_T
     }
 }
 
-impl MapPageReadWrite<AnsiPstFile, { PageType::AllocationMap as u8 }> for AnsiMapPage<{ PageType::AllocationMap as u8 }> {
+impl MapPageReadWrite<AnsiPstFile, { PageType::AllocationMap as u8 }>
+    for AnsiMapPage<{ PageType::AllocationMap as u8 }>
+{
     fn new(amap_bits: MapBits, trailer: AnsiPageTrailer) -> NdbResult<Self> {
         if trailer.page_type() != PageType::AllocationMap {
             return Err(NdbError::UnexpectedPageType(trailer.page_type()));
@@ -406,7 +462,11 @@ impl MapPageReadWrite<AnsiPstFile, { PageType::AllocationMap as u8 }> for AnsiMa
             return Err(NdbError::InvalidPageCrc(crc).into());
         }
 
-        Ok(Self { map_bits, trailer, padding })
+        Ok(Self {
+            map_bits,
+            trailer,
+            padding,
+        })
     }
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
@@ -428,7 +488,9 @@ impl MapPageReadWrite<AnsiPstFile, { PageType::AllocationMap as u8 }> for AnsiMa
     }
 }
 
-impl MapPageReadWrite<AnsiPstFile, { PageType::AllocationPageMap as u8 }> for AnsiMapPage<{ PageType::AllocationPageMap as u8 }> {
+impl MapPageReadWrite<AnsiPstFile, { PageType::AllocationPageMap as u8 }>
+    for AnsiMapPage<{ PageType::AllocationPageMap as u8 }>
+{
     fn new(amap_bits: MapBits, trailer: AnsiPageTrailer) -> NdbResult<Self> {
         if trailer.page_type() != PageType::AllocationPageMap {
             return Err(NdbError::UnexpectedPageType(trailer.page_type()));
@@ -462,7 +524,11 @@ impl MapPageReadWrite<AnsiPstFile, { PageType::AllocationPageMap as u8 }> for An
             return Err(NdbError::InvalidPageCrc(crc).into());
         }
 
-        Ok(Self { map_bits, trailer, padding })
+        Ok(Self {
+            map_bits,
+            trailer,
+            padding,
+        })
     }
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
@@ -484,7 +550,9 @@ impl MapPageReadWrite<AnsiPstFile, { PageType::AllocationPageMap as u8 }> for An
     }
 }
 
-impl MapPageReadWrite<AnsiPstFile, { PageType::FreeMap as u8 }> for AnsiMapPage<{ PageType::FreeMap as u8 }> {
+impl MapPageReadWrite<AnsiPstFile, { PageType::FreeMap as u8 }>
+    for AnsiMapPage<{ PageType::FreeMap as u8 }>
+{
     fn new(amap_bits: MapBits, trailer: AnsiPageTrailer) -> NdbResult<Self> {
         if trailer.page_type() != PageType::FreeMap {
             return Err(NdbError::UnexpectedPageType(trailer.page_type()));
@@ -518,7 +586,11 @@ impl MapPageReadWrite<AnsiPstFile, { PageType::FreeMap as u8 }> for AnsiMapPage<
             return Err(NdbError::InvalidPageCrc(crc).into());
         }
 
-        Ok(Self { map_bits, trailer, padding })
+        Ok(Self {
+            map_bits,
+            trailer,
+            padding,
+        })
     }
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
@@ -540,7 +612,9 @@ impl MapPageReadWrite<AnsiPstFile, { PageType::FreeMap as u8 }> for AnsiMapPage<
     }
 }
 
-impl MapPageReadWrite<AnsiPstFile, { PageType::FreePageMap as u8 }> for AnsiMapPage<{ PageType::FreePageMap as u8 }> {
+impl MapPageReadWrite<AnsiPstFile, { PageType::FreePageMap as u8 }>
+    for AnsiMapPage<{ PageType::FreePageMap as u8 }>
+{
     fn new(amap_bits: MapBits, trailer: AnsiPageTrailer) -> NdbResult<Self> {
         if trailer.page_type() != PageType::FreePageMap {
             return Err(NdbError::UnexpectedPageType(trailer.page_type()));
@@ -574,7 +648,11 @@ impl MapPageReadWrite<AnsiPstFile, { PageType::FreePageMap as u8 }> for AnsiMapP
             return Err(NdbError::InvalidPageCrc(crc).into());
         }
 
-        Ok(Self { map_bits, trailer, padding })
+        Ok(Self {
+            map_bits,
+            trailer,
+            padding,
+        })
     }
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {

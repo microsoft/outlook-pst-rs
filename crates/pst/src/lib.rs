@@ -289,40 +289,7 @@ where
         + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     fn max_free_slots(&self) -> u8 {
-        let mut max_free_slots = 0;
-        let mut current = 0;
-
-        for &page in self.amap_page.map_bits() {
-            if page == 0 {
-                current += 8;
-            } else {
-                let leading_zero = (0..8).take_while(|&i| page & (0x80 >> i) == 0).count();
-                let trailing_zero = (0..8).take_while(|&i| page & (0x01 << i) == 0).count();
-                current += leading_zero;
-                max_free_slots = max_free_slots.max(current.min(0xFF) as u8);
-
-                if (max_free_slots as usize + 2) < (8 - trailing_zero - leading_zero) {
-                    let mut current = 0;
-                    for i in (leading_zero + 1)..(8 - trailing_zero) {
-                        if page & (0x80 >> i) == 0 {
-                            current += 1;
-                        } else {
-                            max_free_slots = max_free_slots.max(current);
-                            current = 0;
-                        }
-                    }
-                    max_free_slots = max_free_slots.max(current);
-                }
-
-                current = trailing_zero;
-            }
-
-            if current >= 0xFF {
-                break;
-            }
-        }
-
-        max_free_slots.max(current.min(0xFF) as u8)
+        u8::try_from(self.amap_page.find_free_bits(0xFF).len()).unwrap_or(0xFF)
     }
 }
 
