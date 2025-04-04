@@ -71,8 +71,8 @@ where
     type BlockId: BlockId + BlockIdReadWrite;
     type ByteIndex: ByteIndex + ByteIndexReadWrite;
     type BlockRef: BlockRef<Block = Self::BlockId, Index = Self::ByteIndex> + BlockRefReadWrite;
-    type Root: Root<BTreeRef = Self::BlockRef>;
-    type Header: Header<Root = Self::Root>;
+    type Root: Root<Self>;
+    type Header: Header<Self>;
     type PageTrailer: PageTrailer<BlockId = Self::BlockId> + PageTrailerReadWrite;
     type BTreeKey: BTreeEntryKey;
     type NodeBTreeEntry: NodeBTreeEntry<Block = Self::BlockId> + BTreeEntry<Key = Self::BTreeKey>;
@@ -281,14 +281,57 @@ where
     free_space: u64,
 }
 
+impl<Pst> AllocationMapPageInfo<Pst>
+where
+    Pst: PstFile,
+    <Pst as PstFile>::AllocationMapPage: AllocationMapPageReadWrite<Pst>,
+    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
+        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
+{
+    fn max_free_slots(&self) -> u8 {
+        let mut max_free_slots = 0;
+        let mut current = 0;
+
+        for &page in self.amap_page.map_bits() {
+            if page == 0 {
+                current += 8;
+            } else {
+                current += (0..8).take_while(|&i| page & (0x80 >> i) == 0).count();
+                max_free_slots = max_free_slots.max(current.min(0xFF) as u8);
+                current = (0..8).take_while(|&i| page & (0x01 << i) == 0).count();
+            }
+
+            if current >= 0xFF {
+                break;
+            }
+        }
+
+        max_free_slots.max(current.min(0xFF) as u8)
+    }
+}
+
+type PstFileReadWriteNodeBTree<Pst> = RootBTreePage<
+    Pst,
+    <<Pst as PstFile>::NodeBTree as RootBTree>::Entry,
+    <<Pst as PstFile>::NodeBTree as RootBTree>::IntermediatePage,
+    <<Pst as PstFile>::NodeBTree as RootBTree>::LeafPage,
+>;
+
+type PstFileReadWriteBlockBTree<Pst> = RootBTreePage<
+    Pst,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+>;
+
 trait PstFileReadWrite: PstFile
 where
     <Self as PstFile>::BlockId:
         From<<<Self as PstFile>::ByteIndex as ByteIndex>::Index> + BlockIdReadWrite,
     <Self as PstFile>::ByteIndex: ByteIndex<Index: TryFrom<u64>> + ByteIndexReadWrite,
     <Self as PstFile>::BlockRef: BlockRefReadWrite,
-    <Self as PstFile>::Root: RootReadWrite,
-    <Self as PstFile>::Header: HeaderReadWrite,
+    <Self as PstFile>::Root: RootReadWrite<Self>,
+    <Self as PstFile>::Header: HeaderReadWrite<Self>,
     <Self as PstFile>::PageTrailer: PageTrailerReadWrite,
     <Self as PstFile>::BTreeKey: BTreePageKeyReadWrite,
     <Self as PstFile>::NodeBTreeEntry: NodeBTreeEntryReadWrite,
@@ -346,6 +389,8 @@ where
         let header = {
             let header = self.header_mut();
             header.update_unique();
+            let root = header.root_mut();
+            root.set_amap_status(AmapStatus::Valid2);
             header.clone()
         };
 
@@ -369,7 +414,7 @@ where
         }
 
         let num_amap_pages = u64::from(root.file_eof_index().index()) - AMAP_FIRST_OFFSET;
-        let num_amap_pages = (num_amap_pages + AMAP_DATA_SIZE - 1) / AMAP_DATA_SIZE;
+        let num_amap_pages = num_amap_pages.div_ceil(AMAP_DATA_SIZE);
 
         let mut amap_pages: Vec<_> = (0..num_amap_pages)
             .map(|index| {
@@ -410,7 +455,7 @@ where
                 let free_space = AMAP_DATA_SIZE - (reserved * PAGE_SIZE) as u64;
 
                 let reserved = &[0xFF; 4][..reserved];
-                map_bits[..reserved.len()].copy_from_slice(&reserved);
+                map_bits[..reserved.len()].copy_from_slice(reserved);
 
                 let amap_page =
                     <<Self as PstFile>::AllocationMapPage as AllocationMapPageReadWrite<Self>>::new(
@@ -430,16 +475,16 @@ where
             let node_btree =
                 <Self::NodeBTree as RootBTreeReadWrite>::read(reader, *root.node_btree())?;
 
-            let block_btree =
-                <Self::BlockBTree as RootBTreeReadWrite>::read(reader, *root.block_btree())?;
-
             self.mark_node_btree_allocations(
                 reader,
                 root.node_btree().index(),
                 &node_btree,
-                &block_btree,
                 &mut amap_pages,
             )?;
+
+            let block_btree =
+                <Self::BlockBTree as RootBTreeReadWrite>::read(reader, *root.block_btree())?;
+
             self.mark_block_btree_allocations(
                 reader,
                 root.block_btree().index(),
@@ -449,6 +494,14 @@ where
         }
 
         let free_bytes = amap_pages.iter().map(|page| page.free_space).sum();
+
+        let mut first_fmap = [0; FMAP_FIRST_SIZE as usize];
+        for (entry, free_space) in first_fmap
+            .iter_mut()
+            .zip(amap_pages.iter().map(|page| page.max_free_slots()))
+        {
+            *entry = free_space;
+        }
 
         let pmap_pages: Vec<_> = (0..=(num_amap_pages / 8))
             .map(|index| {
@@ -476,9 +529,11 @@ where
             })
             .collect::<PstResult<Vec<_>>>()?;
 
-        let fmap_pages: Vec<_> = (0..((num_amap_pages.max(FMAP_FIRST_SIZE) - FMAP_FIRST_SIZE)
-            / FMAP_PAGE_COUNT))
+        let fmap_pages: Vec<_> = (0..(num_amap_pages.max(FMAP_FIRST_SIZE) - FMAP_FIRST_SIZE)
+            .div_ceil(FMAP_PAGE_COUNT))
             .map(|index| {
+                let amap_index =
+                    FMAP_FIRST_SIZE as usize + (index as usize * mem::size_of::<MapBits>());
                 let index =
                     <<<Self as PstFile>::ByteIndex as ByteIndex>::Index as TryFrom<u64>>::try_from(
                         index * FMAP_DATA_SIZE + FMAP_FIRST_OFFSET,
@@ -493,7 +548,15 @@ where
                     0,
                 );
 
-                let map_bits = [0xFF; mem::size_of::<MapBits>()];
+                let mut map_bits = [0; mem::size_of::<MapBits>()];
+                for (entry, free_space) in map_bits.iter_mut().zip(
+                    amap_pages
+                        .iter()
+                        .skip(amap_index)
+                        .map(|page| page.max_free_slots()),
+                ) {
+                    *entry = free_space;
+                }
 
                 let fmap_page =
                     <<Self as PstFile>::FreeMapPage as FreeMapPageReadWrite<Self>>::new(
@@ -503,8 +566,8 @@ where
             })
             .collect::<PstResult<Vec<_>>>()?;
 
-        let fpmap_pages: Vec<_> = (0..((num_amap_pages.max(FPMAP_FIRST_SIZE) - FPMAP_FIRST_SIZE)
-            / FPMAP_PAGE_COUNT))
+        let fpmap_pages: Vec<_> = (0..(num_amap_pages.max(FPMAP_FIRST_SIZE) - FPMAP_FIRST_SIZE)
+            .div_ceil(FPMAP_PAGE_COUNT))
             .map(|index| {
                 let index =
                     <<<Self as PstFile>::ByteIndex as ByteIndex>::Index as TryFrom<u64>>::try_from(
@@ -581,6 +644,8 @@ where
         }
 
         let header = self.header_mut();
+        <<Self as PstFile>::Header as HeaderReadWrite<Self>>::first_free_map(header)
+            .copy_from_slice(&first_fmap);
         let root = header.root_mut();
         root.reset_free_size(free_bytes)?;
         root.set_amap_status(AmapStatus::Valid2);
@@ -592,18 +657,7 @@ where
         &self,
         reader: &mut R,
         page_index: Self::ByteIndex,
-        node_btree: &RootBTreePage<
-            Self,
-            <<Self as PstFile>::NodeBTree as RootBTree>::Entry,
-            <<Self as PstFile>::NodeBTree as RootBTree>::IntermediatePage,
-            <<Self as PstFile>::NodeBTree as RootBTree>::LeafPage,
-        >,
-        block_btree: &RootBTreePage<
-            Self,
-            <<Self as PstFile>::BlockBTree as RootBTree>::Entry,
-            <<Self as PstFile>::BlockBTree as RootBTree>::IntermediatePage,
-            <<Self as PstFile>::BlockBTree as RootBTree>::LeafPage,
-        >,
+        node_btree: &PstFileReadWriteNodeBTree<Self>,
         amap_pages: &mut Vec<AllocationMapPageInfo<Self>>,
     ) -> io::Result<()> {
         Self::mark_page_allocation(u64::from(page_index.index()), amap_pages)?;
@@ -612,13 +666,7 @@ where
             for entry in page.entries() {
                 let block = entry.block();
                 let node_btree = <Self::NodeBTree as RootBTreeReadWrite>::read(reader, block)?;
-                self.mark_node_btree_allocations(
-                    reader,
-                    block.index(),
-                    &node_btree,
-                    block_btree,
-                    amap_pages,
-                )?;
+                self.mark_node_btree_allocations(reader, block.index(), &node_btree, amap_pages)?;
             }
         }
 
@@ -629,12 +677,7 @@ where
         &self,
         reader: &mut R,
         page_index: Self::ByteIndex,
-        block_btree: &RootBTreePage<
-            Self,
-            <<Self as PstFile>::BlockBTree as RootBTree>::Entry,
-            <<Self as PstFile>::BlockBTree as RootBTree>::IntermediatePage,
-            <<Self as PstFile>::BlockBTree as RootBTree>::LeafPage,
-        >,
+        block_btree: &PstFileReadWriteBlockBTree<Self>,
         amap_pages: &mut Vec<AllocationMapPageInfo<Self>>,
     ) -> io::Result<()> {
         Self::mark_page_allocation(u64::from(page_index.index()), amap_pages)?;
@@ -669,7 +712,7 @@ where
         index: u64,
         amap_pages: &mut Vec<AllocationMapPageInfo<Self>>,
     ) -> io::Result<()> {
-        let index = u64::from(index) - AMAP_FIRST_OFFSET;
+        let index = index - AMAP_FIRST_OFFSET;
         let amap_index =
             usize::try_from(index / AMAP_DATA_SIZE).map_err(|_| PstError::IntegerConversion)?;
         let entry = amap_pages
@@ -701,7 +744,7 @@ where
         size: u16,
         amap_pages: &mut Vec<AllocationMapPageInfo<Self>>,
     ) -> io::Result<()> {
-        let index = u64::from(index) - AMAP_FIRST_OFFSET;
+        let index = index - AMAP_FIRST_OFFSET;
         let amap_index =
             usize::try_from(index / AMAP_DATA_SIZE).map_err(|_| PstError::IntegerConversion)?;
         let entry = amap_pages

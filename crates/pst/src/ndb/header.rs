@@ -4,7 +4,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
 use super::{block_id::*, block_ref::*, byte_index::*, read_write::*, root::*, *};
-use crate::crc::compute_crc;
+use crate::{crc::compute_crc, AnsiPstFile, PstFile, UnicodePstFile};
 
 /// `dwMagic`
 ///
@@ -106,17 +106,16 @@ impl TryFrom<u8> for NdbCryptMethod {
     }
 }
 
-pub trait Header: Clone
+pub trait Header<Pst>: Clone
 where
-    u64: From<<<<Self::Root as Root>::BTreeRef as BlockRef>::Block as BlockId>::Index>
-        + From<<<<Self::Root as Root>::BTreeRef as BlockRef>::Index as ByteIndex>::Index>,
+    Pst: PstFile,
+    u64: From<<<<Pst as PstFile>::BlockRef as BlockRef>::Block as BlockId>::Index>
+        + From<<<<Pst as PstFile>::BlockRef as BlockRef>::Index as ByteIndex>::Index>,
 {
-    type Root: Root;
-
     fn version(&self) -> NdbVersion;
     fn crypt_method(&self) -> NdbCryptMethod;
-    fn root(&self) -> &Self::Root;
-    fn root_mut(&mut self) -> &mut Self::Root;
+    fn root(&self) -> &<Pst as PstFile>::Root;
+    fn root_mut(&mut self) -> &mut <Pst as PstFile>::Root;
 }
 
 #[derive(Clone, Debug)]
@@ -125,6 +124,8 @@ pub struct UnicodeHeader {
     unique: u32,
     nids: [u32; 32],
     root: UnicodeRoot,
+    free_map: [u8; 128],
+    free_page_map: [u8; 128],
     crypt_method: NdbCryptMethod,
     next_block: UnicodeBlockId,
 
@@ -142,6 +143,8 @@ impl UnicodeHeader {
             unique: 0,
             nids: NDB_DEFAULT_NIDS,
             root,
+            free_map: [0xFF; 128],
+            free_page_map: [0xFF; 128],
             crypt_method,
             next_block: Default::default(),
             reserved1: 0,
@@ -153,9 +156,7 @@ impl UnicodeHeader {
     }
 }
 
-impl Header for UnicodeHeader {
-    type Root = UnicodeRoot;
-
+impl Header<UnicodePstFile> for UnicodeHeader {
     fn version(&self) -> NdbVersion {
         NdbVersion::Unicode
     }
@@ -164,16 +165,16 @@ impl Header for UnicodeHeader {
         self.crypt_method
     }
 
-    fn root(&self) -> &UnicodeRoot {
+    fn root(&self) -> &<UnicodePstFile as PstFile>::Root {
         &self.root
     }
 
-    fn root_mut(&mut self) -> &mut UnicodeRoot {
+    fn root_mut(&mut self) -> &mut <UnicodePstFile as PstFile>::Root {
         &mut self.root
     }
 }
 
-impl HeaderReadWrite for UnicodeHeader {
+impl HeaderReadWrite<UnicodePstFile> for UnicodeHeader {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         // dwMagic
         let magic = f.read_u32::<LittleEndian>()?;
@@ -268,10 +269,12 @@ impl HeaderReadWrite for UnicodeHeader {
         }
 
         // rgbFM
-        cursor.seek(SeekFrom::Current(128))?;
+        let mut free_map = [0; 128];
+        cursor.read_exact(&mut free_map)?;
 
         // rgbFP
-        cursor.seek(SeekFrom::Current(128))?;
+        let mut free_page_map = [0; 128];
+        cursor.read_exact(&mut free_page_map)?;
 
         // bSentinel
         let sentinel = cursor.read_u8()?;
@@ -300,6 +303,8 @@ impl HeaderReadWrite for UnicodeHeader {
             unique,
             nids,
             root,
+            free_map,
+            free_page_map,
             crypt_method,
             next_block,
             reserved1,
@@ -343,9 +348,9 @@ impl HeaderReadWrite for UnicodeHeader {
         // dwAlign
         cursor.write_u32::<LittleEndian>(0)?;
         // rgbFM
-        cursor.write_all(&[0xFF; 128])?;
+        cursor.write_all(&self.free_map)?;
         // rgbFP
-        cursor.write_all(&[0xFF; 128])?;
+        cursor.write_all(&self.free_page_map)?;
         // bSentinel
         cursor.write_u8(NDB_SENTINEL)?;
         // bCryptMethod
@@ -376,6 +381,10 @@ impl HeaderReadWrite for UnicodeHeader {
     fn update_unique(&mut self) {
         self.unique = self.unique.wrapping_add(1);
     }
+
+    fn first_free_map(&mut self) -> &mut [u8] {
+        &mut self.free_map
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -385,6 +394,8 @@ pub struct AnsiHeader {
     unique: u32,
     nids: [u32; 32],
     root: AnsiRoot,
+    free_map: [u8; 128],
+    free_page_map: [u8; 128],
     crypt_method: NdbCryptMethod,
 
     reserved1: u32,
@@ -400,6 +411,8 @@ impl AnsiHeader {
             unique: 0,
             nids: NDB_DEFAULT_NIDS,
             root,
+            free_map: [0xFF; 128],
+            free_page_map: [0xFF; 128],
             crypt_method,
             reserved1: 0,
             reserved2: 0,
@@ -408,9 +421,7 @@ impl AnsiHeader {
     }
 }
 
-impl Header for AnsiHeader {
-    type Root = AnsiRoot;
-
+impl Header<AnsiPstFile> for AnsiHeader {
     fn version(&self) -> NdbVersion {
         NdbVersion::Ansi
     }
@@ -419,16 +430,16 @@ impl Header for AnsiHeader {
         self.crypt_method
     }
 
-    fn root(&self) -> &AnsiRoot {
+    fn root(&self) -> &<AnsiPstFile as PstFile>::Root {
         &self.root
     }
 
-    fn root_mut(&mut self) -> &mut Self::Root {
+    fn root_mut(&mut self) -> &mut <AnsiPstFile as PstFile>::Root {
         &mut self.root
     }
 }
 
-impl HeaderReadWrite for AnsiHeader {
+impl HeaderReadWrite<AnsiPstFile> for AnsiHeader {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         // dwMagic
         let magic = f.read_u32::<LittleEndian>()?;
@@ -502,10 +513,12 @@ impl HeaderReadWrite for AnsiHeader {
         let root = AnsiRoot::read(&mut cursor)?;
 
         // rgbFM
-        cursor.seek(SeekFrom::Current(128))?;
+        let mut free_map = [0; 128];
+        cursor.read_exact(&mut free_map)?;
 
         // rgbFP
-        cursor.seek(SeekFrom::Current(128))?;
+        let mut free_page_map = [0; 128];
+        cursor.read_exact(&mut free_page_map)?;
 
         // bSentinel
         let sentinel = cursor.read_u8()?;
@@ -538,6 +551,8 @@ impl HeaderReadWrite for AnsiHeader {
             unique,
             nids,
             root,
+            free_map,
+            free_page_map,
             crypt_method,
             next_block,
             reserved1,
@@ -575,9 +590,9 @@ impl HeaderReadWrite for AnsiHeader {
         // root
         self.root.write(&mut cursor)?;
         // rgbFM
-        cursor.write_all(&[0xFF; 128])?;
+        cursor.write_all(&self.free_map)?;
         // rgbFP
-        cursor.write_all(&[0xFF; 128])?;
+        cursor.write_all(&self.free_page_map)?;
         // bSentinel
         cursor.write_u8(NDB_SENTINEL)?;
         // bCryptMethod
@@ -602,6 +617,10 @@ impl HeaderReadWrite for AnsiHeader {
 
     fn update_unique(&mut self) {
         self.unique = self.unique.wrapping_add(1);
+    }
+
+    fn first_free_map(&mut self) -> &mut [u8] {
+        &mut self.free_map
     }
 }
 

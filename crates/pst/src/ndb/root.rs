@@ -3,6 +3,7 @@
 use std::fmt::Debug;
 
 use super::{block_id::*, block_ref::*, byte_index::*, read_write::*, *};
+use crate::{AnsiPstFile, PstFile, UnicodePstFile};
 
 /// `fAMapValid`
 ///
@@ -39,19 +40,18 @@ impl From<AmapStatus> for bool {
     }
 }
 
-pub trait Root
+pub trait Root<Pst>
 where
-    u64: From<<<<Self as Root>::BTreeRef as BlockRef>::Block as BlockId>::Index>
-        + From<<<<Self as Root>::BTreeRef as BlockRef>::Index as ByteIndex>::Index>,
+    Pst: PstFile,
+    u64: From<<<<Pst as PstFile>::BlockRef as BlockRef>::Block as BlockId>::Index>
+        + From<<<<Pst as PstFile>::BlockRef as BlockRef>::Index as ByteIndex>::Index>,
 {
-    type BTreeRef: BlockRef + Debug;
-
-    fn file_eof_index(&self) -> &<Self::BTreeRef as BlockRef>::Index;
-    fn amap_last_index(&self) -> &<Self::BTreeRef as BlockRef>::Index;
-    fn amap_free_size(&self) -> &<Self::BTreeRef as BlockRef>::Index;
-    fn pmap_free_size(&self) -> &<Self::BTreeRef as BlockRef>::Index;
-    fn node_btree(&self) -> &Self::BTreeRef;
-    fn block_btree(&self) -> &Self::BTreeRef;
+    fn file_eof_index(&self) -> &<<Pst as PstFile>::BlockRef as BlockRef>::Index;
+    fn amap_last_index(&self) -> &<<Pst as PstFile>::BlockRef as BlockRef>::Index;
+    fn amap_free_size(&self) -> &<<Pst as PstFile>::BlockRef as BlockRef>::Index;
+    fn pmap_free_size(&self) -> &<<Pst as PstFile>::BlockRef as BlockRef>::Index;
+    fn node_btree(&self) -> &<Pst as PstFile>::BlockRef;
+    fn block_btree(&self) -> &<Pst as PstFile>::BlockRef;
     fn amap_is_valid(&self) -> AmapStatus;
 }
 
@@ -94,9 +94,7 @@ impl UnicodeRoot {
     }
 }
 
-impl Root for UnicodeRoot {
-    type BTreeRef = UnicodeBlockRef;
-
+impl Root<UnicodePstFile> for UnicodeRoot {
     fn file_eof_index(&self) -> &UnicodeByteIndex {
         &self.file_eof_index
     }
@@ -126,7 +124,7 @@ impl Root for UnicodeRoot {
     }
 }
 
-impl RootReadWrite for UnicodeRoot {
+impl RootReadWrite<UnicodePstFile> for UnicodeRoot {
     fn new(
         file_eof_index: UnicodeByteIndex,
         amap_last_index: UnicodeByteIndex,
@@ -215,9 +213,7 @@ impl AnsiRoot {
     }
 }
 
-impl Root for AnsiRoot {
-    type BTreeRef = AnsiBlockRef;
-
+impl Root<AnsiPstFile> for AnsiRoot {
     fn file_eof_index(&self) -> &AnsiByteIndex {
         &self.file_eof_index
     }
@@ -247,7 +243,7 @@ impl Root for AnsiRoot {
     }
 }
 
-impl RootReadWrite for AnsiRoot {
+impl RootReadWrite<AnsiPstFile> for AnsiRoot {
     fn new(
         file_eof_index: AnsiByteIndex,
         amap_last_index: AnsiByteIndex,

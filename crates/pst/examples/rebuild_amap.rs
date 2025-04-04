@@ -30,8 +30,7 @@ where
         .expect("Failed to start write transaction");
 
     // Since the allocation map is marked as invalid, this will rebuild it.
-    pst.start_write()
-        .expect("Failed to rebuild allocation map");
+    pst.start_write().expect("Failed to rebuild allocation map");
 
     // This will mark the allocation map as valid.
     pst.finish_write()

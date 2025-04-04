@@ -58,20 +58,21 @@ where
     }
 }
 
-pub trait RootReadWrite: Root + Sized
+pub trait RootReadWrite<Pst>: Root<Pst> + Sized
 where
-    <Self as Root>::BTreeRef:
-        BlockRef<Block: BlockIdReadWrite, Index: ByteIndexReadWrite> + BlockRefReadWrite,
-    u64: From<<<<Self as Root>::BTreeRef as BlockRef>::Block as BlockId>::Index>
-        + From<<<<Self as Root>::BTreeRef as BlockRef>::Index as ByteIndex>::Index>,
+    Pst: PstFile,
+    <Pst as PstFile>::ByteIndex: ByteIndexReadWrite,
+    <Pst as PstFile>::BlockRef: BlockRefReadWrite,
+    u64: From<<<<Pst as PstFile>::BlockRef as BlockRef>::Block as BlockId>::Index>
+        + From<<<<Pst as PstFile>::BlockRef as BlockRef>::Index as ByteIndex>::Index>,
 {
     fn new(
-        file_eof_index: <<Self as Root>::BTreeRef as BlockRef>::Index,
-        amap_last_index: <<Self as Root>::BTreeRef as BlockRef>::Index,
-        amap_free_size: <<Self as Root>::BTreeRef as BlockRef>::Index,
-        pmap_free_size: <<Self as Root>::BTreeRef as BlockRef>::Index,
-        node_btree: Self::BTreeRef,
-        block_btree: Self::BTreeRef,
+        file_eof_index: <Pst as PstFile>::ByteIndex,
+        amap_last_index: <Pst as PstFile>::ByteIndex,
+        amap_free_size: <Pst as PstFile>::ByteIndex,
+        pmap_free_size: <Pst as PstFile>::ByteIndex,
+        node_btree: <Pst as PstFile>::BlockRef,
+        block_btree: <Pst as PstFile>::BlockRef,
         amap_is_valid: AmapStatus,
     ) -> Self;
 
@@ -83,16 +84,16 @@ where
 
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let reserved1 = f.read_u32::<LittleEndian>()?;
-        let file_eof_index = <<Self as Root>::BTreeRef as BlockRef>::Index::read(f)?;
-        let amap_last_index = <<Self as Root>::BTreeRef as BlockRef>::Index::read(f)?;
-        let amap_free_size = <<Self as Root>::BTreeRef as BlockRef>::Index::read(f)?;
-        let pmap_free_size = <<Self as Root>::BTreeRef as BlockRef>::Index::read(f)?;
-        let node_btree = Self::BTreeRef::read(f)?;
-        let block_btree = Self::BTreeRef::read(f)?;
+        let file_eof_index = <<Pst as PstFile>::ByteIndex as ByteIndexReadWrite>::read(f)?;
+        let amap_last_index = <<Pst as PstFile>::ByteIndex as ByteIndexReadWrite>::read(f)?;
+        let amap_free_size = <<Pst as PstFile>::ByteIndex as ByteIndexReadWrite>::read(f)?;
+        let pmap_free_size = <<Pst as PstFile>::ByteIndex as ByteIndexReadWrite>::read(f)?;
+        let node_btree = <<Pst as PstFile>::BlockRef as BlockRefReadWrite>::read(f)?;
+        let block_btree = <<Pst as PstFile>::BlockRef as BlockRefReadWrite>::read(f)?;
         let amap_is_valid = AmapStatus::try_from(f.read_u8()?).unwrap_or(AmapStatus::Invalid);
         let reserved2 = f.read_u8()?;
         let reserved3 = f.read_u16::<LittleEndian>()?;
-        let mut root = Self::new(
+        let mut root = <Self as RootReadWrite<Pst>>::new(
             file_eof_index,
             amap_last_index,
             amap_free_size,
@@ -122,18 +123,17 @@ where
     fn reset_free_size(&mut self, free_bytes: u64) -> NdbResult<()>;
 }
 
-pub trait HeaderReadWrite: Header + Sized
+pub trait HeaderReadWrite<Pst>: Header<Pst> + Sized
 where
-    <Self as Header>::Root: Root<
-            BTreeRef: BlockRef<Block: BlockIdReadWrite, Index: ByteIndexReadWrite>
-                          + BlockRefReadWrite,
-        > + RootReadWrite,
-    u64: From<<<<<Self as Header>::Root as Root>::BTreeRef as BlockRef>::Block as BlockId>::Index>
-        + From<<<<<Self as Header>::Root as Root>::BTreeRef as BlockRef>::Index as ByteIndex>::Index>,
+    Pst: PstFile,
+    <Pst as PstFile>::Root: Root<Pst> + RootReadWrite<Pst>,
+    u64: From<<<<Pst as PstFile>::BlockRef as BlockRef>::Block as BlockId>::Index>
+        + From<<<<Pst as PstFile>::BlockRef as BlockRef>::Index as ByteIndex>::Index>,
 {
     fn read(f: &mut dyn Read) -> io::Result<Self>;
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
     fn update_unique(&mut self);
+    fn first_free_map(&mut self) -> &mut [u8];
 }
 
 pub trait PageTrailerReadWrite: PageTrailer + Copy + Sized
@@ -780,6 +780,13 @@ where
     }
 }
 
+type RootBTreePageReadWrite<BTree> = RootBTreePage<
+    <BTree as RootBTree>::Pst,
+    <BTree as RootBTree>::Entry,
+    <BTree as RootBTree>::IntermediatePage,
+    <BTree as RootBTree>::LeafPage,
+>;
+
 pub trait RootBTreeReadWrite: RootBTree + Sized
 where
     <<Self as RootBTree>::Pst as PstFile>::BlockId: BlockIdReadWrite,
@@ -801,14 +808,7 @@ where
     fn read<R: Read + Seek>(
         f: &mut R,
         block: <<Self as RootBTree>::Pst as PstFile>::BlockRef,
-    ) -> io::Result<
-        RootBTreePage<
-            <Self as RootBTree>::Pst,
-            <Self as RootBTree>::Entry,
-            <Self as RootBTree>::IntermediatePage,
-            <Self as RootBTree>::LeafPage,
-        >,
-    >;
+    ) -> io::Result<RootBTreePageReadWrite<Self>>;
     fn write<W: Write + Seek>(
         &self,
         f: &mut W,
