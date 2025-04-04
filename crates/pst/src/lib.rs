@@ -296,9 +296,25 @@ where
             if page == 0 {
                 current += 8;
             } else {
-                current += (0..8).take_while(|&i| page & (0x80 >> i) == 0).count();
+                let leading_zero = (0..8).take_while(|&i| page & (0x80 >> i) == 0).count();
+                let trailing_zero = (0..8).take_while(|&i| page & (0x01 << i) == 0).count();
+                current += leading_zero;
                 max_free_slots = max_free_slots.max(current.min(0xFF) as u8);
-                current = (0..8).take_while(|&i| page & (0x01 << i) == 0).count();
+
+                if (max_free_slots as usize + 2) < (8 - trailing_zero - leading_zero) {
+                    let mut current = 0;
+                    for i in (leading_zero + 1)..(8 - trailing_zero) {
+                        if page & (0x80 >> i) == 0 {
+                            current += 1;
+                        } else {
+                            max_free_slots = max_free_slots.max(current);
+                            current = 0;
+                        }
+                    }
+                    max_free_slots = max_free_slots.max(current);
+                }
+
+                current = trailing_zero;
             }
 
             if current >= 0xFF {
@@ -431,7 +447,7 @@ where
                         index * AMAP_DATA_SIZE + AMAP_FIRST_OFFSET,
                     )
                     .map_err(|_| PstError::IntegerConversion)?;
-                let index = <<Self as PstFile>::BlockRef as BlockRef>::Block::from(index);
+                let index = <Self as PstFile>::BlockId::from(index);
 
                 let trailer = <<Self as PstFile>::PageTrailer as PageTrailerReadWrite>::new(
                     PageType::AllocationMap,
@@ -510,7 +526,7 @@ where
                         index * PMAP_DATA_SIZE + PMAP_FIRST_OFFSET,
                     )
                     .map_err(|_| PstError::IntegerConversion)?;
-                let index = <<Self as PstFile>::BlockRef as BlockRef>::Block::from(index);
+                let index = <Self as PstFile>::BlockId::from(index);
 
                 let trailer = <<Self as PstFile>::PageTrailer as PageTrailerReadWrite>::new(
                     PageType::AllocationPageMap,
@@ -539,7 +555,7 @@ where
                         index * FMAP_DATA_SIZE + FMAP_FIRST_OFFSET,
                     )
                     .map_err(|_| PstError::IntegerConversion)?;
-                let index = <<Self as PstFile>::BlockRef as BlockRef>::Block::from(index);
+                let index = <Self as PstFile>::BlockId::from(index);
 
                 let trailer = <<Self as PstFile>::PageTrailer as PageTrailerReadWrite>::new(
                     PageType::FreeMap,
@@ -574,7 +590,7 @@ where
                         index * FPMAP_DATA_SIZE + FPMAP_FIRST_OFFSET,
                     )
                     .map_err(|_| PstError::IntegerConversion)?;
-                let index = <<Self as PstFile>::BlockRef as BlockRef>::Block::from(index);
+                let index = <Self as PstFile>::BlockId::from(index);
 
                 let trailer = <<Self as PstFile>::PageTrailer as PageTrailerReadWrite>::new(
                     PageType::FreePageMap,
