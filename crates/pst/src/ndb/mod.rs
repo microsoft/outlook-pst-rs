@@ -69,8 +69,6 @@ pub enum NdbError {
     UnexpectedPageType(PageType),
     #[error("Invalid PAGETRAILER dwCRC: 0x{0:08X}")]
     InvalidPageCrc(u32),
-    #[error("Invalid ANSI map page dwPadding: 0x{0:08X}")]
-    InvalidAnsiMapPagePadding(u32),
     #[error("Invalid DLISTPAGEENT dwPageNum: 0x{0:X}")]
     InvalidDensityListEntryPageNumber(u32),
     #[error("Invalid DLISTPAGEENT dwFreeSlots: 0x{0:04X}")]

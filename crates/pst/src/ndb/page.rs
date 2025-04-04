@@ -355,6 +355,7 @@ impl<const PAGE_TYPE: u8> MapPageReadWrite<UnicodePstFile, PAGE_TYPE>
 pub struct AnsiMapPage<const P: u8> {
     map_bits: MapBits,
     trailer: AnsiPageTrailer,
+    padding: u32,
 }
 
 impl<const PAGE_TYPE: u8> MapPage<AnsiPstFile, PAGE_TYPE> for AnsiMapPage<PAGE_TYPE> {
@@ -371,14 +372,15 @@ impl<const PAGE_TYPE: u8> MapPage<AnsiPstFile, PAGE_TYPE> for AnsiMapPage<PAGE_T
     }
 }
 
-impl<const PAGE_TYPE: u8> MapPageReadWrite<AnsiPstFile, PAGE_TYPE> for AnsiMapPage<PAGE_TYPE> {
+impl MapPageReadWrite<AnsiPstFile, { PageType::AllocationMap as u8 }> for AnsiMapPage<{ PageType::AllocationMap as u8 }> {
     fn new(amap_bits: MapBits, trailer: AnsiPageTrailer) -> NdbResult<Self> {
-        if trailer.page_type() as u8 != PAGE_TYPE {
+        if trailer.page_type() != PageType::AllocationMap {
             return Err(NdbError::UnexpectedPageType(trailer.page_type()));
         }
         Ok(Self {
             map_bits: amap_bits,
             trailer,
+            padding: 0,
         })
     }
 
@@ -388,9 +390,6 @@ impl<const PAGE_TYPE: u8> MapPageReadWrite<AnsiPstFile, PAGE_TYPE> for AnsiMapPa
         let mut cursor = Cursor::new(buffer);
 
         let padding = cursor.read_u32::<LittleEndian>()?;
-        if padding != 0 {
-            return Err(NdbError::InvalidAnsiMapPagePadding(padding).into());
-        }
 
         let mut map_bits = [0_u8; mem::size_of::<MapBits>()];
         cursor.read_exact(&mut map_bits)?;
@@ -398,7 +397,7 @@ impl<const PAGE_TYPE: u8> MapPageReadWrite<AnsiPstFile, PAGE_TYPE> for AnsiMapPa
         let buffer = cursor.into_inner();
 
         let trailer = AnsiPageTrailer::read(f)?;
-        if trailer.page_type() as u8 != PAGE_TYPE {
+        if trailer.page_type() != PageType::AllocationMap {
             return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
         }
 
@@ -407,14 +406,182 @@ impl<const PAGE_TYPE: u8> MapPageReadWrite<AnsiPstFile, PAGE_TYPE> for AnsiMapPa
             return Err(NdbError::InvalidPageCrc(crc).into());
         }
 
-        Ok(Self { map_bits, trailer })
+        Ok(Self { map_bits, trailer, padding })
     }
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         let mut cursor = Cursor::new([0_u8; 500]);
 
-        cursor.write_u32::<LittleEndian>(0)?;
+        cursor.write_u32::<LittleEndian>(self.padding)?;
         cursor.write_all(&self.map_bits)?;
+
+        let buffer = cursor.into_inner();
+        let crc = compute_crc(0, &buffer);
+
+        f.write_all(&buffer)?;
+
+        let trailer = AnsiPageTrailer {
+            crc,
+            ..self.trailer
+        };
+        trailer.write(f)
+    }
+}
+
+impl MapPageReadWrite<AnsiPstFile, { PageType::AllocationPageMap as u8 }> for AnsiMapPage<{ PageType::AllocationPageMap as u8 }> {
+    fn new(amap_bits: MapBits, trailer: AnsiPageTrailer) -> NdbResult<Self> {
+        if trailer.page_type() != PageType::AllocationPageMap {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()));
+        }
+        Ok(Self {
+            map_bits: amap_bits,
+            trailer,
+            padding: 0,
+        })
+    }
+
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let mut buffer = [0_u8; 500];
+        f.read_exact(&mut buffer)?;
+        let mut cursor = Cursor::new(buffer);
+
+        let padding = cursor.read_u32::<LittleEndian>()?;
+
+        let mut map_bits = [0_u8; mem::size_of::<MapBits>()];
+        cursor.read_exact(&mut map_bits)?;
+
+        let buffer = cursor.into_inner();
+
+        let trailer = AnsiPageTrailer::read(f)?;
+        if trailer.page_type() != PageType::AllocationPageMap {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
+        }
+
+        let crc = compute_crc(0, &buffer);
+        if crc != trailer.crc() {
+            return Err(NdbError::InvalidPageCrc(crc).into());
+        }
+
+        Ok(Self { map_bits, trailer, padding })
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        let mut cursor = Cursor::new([0_u8; 500]);
+
+        cursor.write_u32::<LittleEndian>(self.padding)?;
+        cursor.write_all(&self.map_bits)?;
+
+        let buffer = cursor.into_inner();
+        let crc = compute_crc(0, &buffer);
+
+        f.write_all(&buffer)?;
+
+        let trailer = AnsiPageTrailer {
+            crc,
+            ..self.trailer
+        };
+        trailer.write(f)
+    }
+}
+
+impl MapPageReadWrite<AnsiPstFile, { PageType::FreeMap as u8 }> for AnsiMapPage<{ PageType::FreeMap as u8 }> {
+    fn new(amap_bits: MapBits, trailer: AnsiPageTrailer) -> NdbResult<Self> {
+        if trailer.page_type() != PageType::FreeMap {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()));
+        }
+        Ok(Self {
+            map_bits: amap_bits,
+            trailer,
+            padding: 0,
+        })
+    }
+
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let mut buffer = [0_u8; 500];
+        f.read_exact(&mut buffer)?;
+        let mut cursor = Cursor::new(buffer);
+
+        let mut map_bits = [0_u8; mem::size_of::<MapBits>()];
+        cursor.read_exact(&mut map_bits)?;
+
+        let padding = cursor.read_u32::<LittleEndian>()?;
+
+        let buffer = cursor.into_inner();
+
+        let trailer = AnsiPageTrailer::read(f)?;
+        if trailer.page_type() != PageType::FreeMap {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
+        }
+
+        let crc = compute_crc(0, &buffer);
+        if crc != trailer.crc() {
+            return Err(NdbError::InvalidPageCrc(crc).into());
+        }
+
+        Ok(Self { map_bits, trailer, padding })
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        let mut cursor = Cursor::new([0_u8; 500]);
+
+        cursor.write_all(&self.map_bits)?;
+        cursor.write_u32::<LittleEndian>(self.padding)?;
+
+        let buffer = cursor.into_inner();
+        let crc = compute_crc(0, &buffer);
+
+        f.write_all(&buffer)?;
+
+        let trailer = AnsiPageTrailer {
+            crc,
+            ..self.trailer
+        };
+        trailer.write(f)
+    }
+}
+
+impl MapPageReadWrite<AnsiPstFile, { PageType::FreePageMap as u8 }> for AnsiMapPage<{ PageType::FreePageMap as u8 }> {
+    fn new(amap_bits: MapBits, trailer: AnsiPageTrailer) -> NdbResult<Self> {
+        if trailer.page_type() != PageType::FreePageMap {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()));
+        }
+        Ok(Self {
+            map_bits: amap_bits,
+            trailer,
+            padding: 0,
+        })
+    }
+
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let mut buffer = [0_u8; 500];
+        f.read_exact(&mut buffer)?;
+        let mut cursor = Cursor::new(buffer);
+
+        let mut map_bits = [0_u8; mem::size_of::<MapBits>()];
+        cursor.read_exact(&mut map_bits)?;
+
+        let padding = cursor.read_u32::<LittleEndian>()?;
+
+        let buffer = cursor.into_inner();
+
+        let trailer = AnsiPageTrailer::read(f)?;
+        if trailer.page_type() != PageType::FreePageMap {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
+        }
+
+        let crc = compute_crc(0, &buffer);
+        if crc != trailer.crc() {
+            return Err(NdbError::InvalidPageCrc(crc).into());
+        }
+
+        Ok(Self { map_bits, trailer, padding })
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        let mut cursor = Cursor::new([0_u8; 500]);
+
+        cursor.write_all(&self.map_bits)?;
+        cursor.write_u32::<LittleEndian>(self.padding)?;
 
         let buffer = cursor.into_inner();
         let crc = compute_crc(0, &buffer);
