@@ -79,7 +79,9 @@ where
                     .get_or_init(|| {
                         let ipm_sub_tree = self.store()?.properties().ipm_sub_tree_entry_id()?;
                         let ipm_subtree_folder = AnsiFolder::read(self.store()?, &ipm_sub_tree)?;
-                        let hierarchy_table = ipm_subtree_folder.hierarchy_table();
+                        let hierarchy_table = ipm_subtree_folder.hierarchy_table().ok_or(
+                            anyhow::anyhow!("No hierarchy table found for the IPM Subtree."),
+                        )?;
 
                         hierarchy_table
                             .rows_matrix()
@@ -134,26 +136,28 @@ where
         Ok(self
             .sub_folders
             .get_or_init(|| {
-                let mut sub_folders = self
-                    .pst_sub_folders
-                    .get_or_init(|| {
-                        let hierarchy_table = self.pst_folder.hierarchy_table();
+                let mut sub_folders =
+                    self.pst_sub_folders
+                        .get_or_init(|| {
+                            let hierarchy_table = self.pst_folder.hierarchy_table().ok_or(
+                                anyhow::anyhow!("No hierarchy table found for the folder."),
+                            )?;
 
-                        hierarchy_table
-                            .rows_matrix()
-                            .map(|row| {
-                                let node = NodeId::from(u32::from(row.id()));
-                                let entry_id =
-                                    self.pst_folder.store().properties().make_entry_id(node)?;
-                                Ok(AnsiFolder::read(self.pst_folder.store(), &entry_id)?)
-                            })
-                            .collect()
-                    })
-                    .as_ref()
-                    .map_err(|err| anyhow::anyhow!("{err:?}"))?
-                    .iter()
-                    .map(Folder::new)
-                    .collect::<Result<Vec<_>, _>>()?;
+                            hierarchy_table
+                                .rows_matrix()
+                                .map(|row| {
+                                    let node = NodeId::from(u32::from(row.id()));
+                                    let entry_id =
+                                        self.pst_folder.store().properties().make_entry_id(node)?;
+                                    Ok(AnsiFolder::read(self.pst_folder.store(), &entry_id)?)
+                                })
+                                .collect()
+                        })
+                        .as_ref()
+                        .map_err(|err| anyhow::anyhow!("{err:?}"))?
+                        .iter()
+                        .map(Folder::new)
+                        .collect::<Result<Vec<_>, _>>()?;
                 sub_folders.sort_by(|a, b| a.name.cmp(&b.name));
 
                 Ok(sub_folders)
@@ -166,7 +170,10 @@ where
     fn messages(&'folder self) -> anyhow::Result<&'folder [Message<'store, 'folder>]> {
         self.messages
             .get_or_init(|| {
-                let contents_table = self.pst_folder.contents_table();
+                let contents_table = self
+                    .pst_folder
+                    .contents_table()
+                    .ok_or(anyhow::anyhow!("No contents table found for the folder."))?;
                 contents_table
                     .rows_matrix()
                     .map(|row| Message::new(self.pst_folder.store(), contents_table, row))

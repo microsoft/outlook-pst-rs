@@ -12,7 +12,9 @@ fn main() -> anyhow::Result<()> {
     let store = UnicodeStore::read(&pst).unwrap();
     let ipm_sub_tree = store.properties().ipm_sub_tree_entry_id()?;
     let folder = UnicodeFolder::read(&store, &ipm_sub_tree)?;
-    let hierarchy_table = folder.hierarchy_table();
+    let hierarchy_table = folder.hierarchy_table().ok_or(anyhow::anyhow!(
+        "No hierarchy table found for the IPM Subtree."
+    ))?;
     let context = hierarchy_table.context();
 
     for row in hierarchy_table.rows_matrix() {

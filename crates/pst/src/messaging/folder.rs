@@ -98,9 +98,9 @@ impl FolderProperties {
 pub struct UnicodeFolder<'a> {
     store: &'a UnicodeStore<'a>,
     properties: FolderProperties,
-    hierarchy_table: UnicodeTableContext,
-    contents_table: UnicodeTableContext,
-    associated_table: UnicodeTableContext,
+    hierarchy_table: Option<UnicodeTableContext>,
+    contents_table: Option<UnicodeTableContext>,
+    associated_table: Option<UnicodeTableContext>,
 }
 
 impl<'a> UnicodeFolder<'a> {
@@ -156,16 +156,43 @@ impl<'a> UnicodeFolder<'a> {
             let properties = FolderProperties { properties };
 
             let node_id = NodeId::new(NodeIdType::HierarchyTable, node_id.index())?;
-            let node = node_btree.find_entry(file, u64::from(u32::from(node_id)))?;
-            let hierarchy_table = UnicodeTableContext::read(file, encoding, &block_btree, node)?;
+            let hierarchy_table =
+                if let Ok(node) = node_btree.find_entry(file, u64::from(u32::from(node_id))) {
+                    Some(UnicodeTableContext::read(
+                        file,
+                        encoding,
+                        &block_btree,
+                        node,
+                    )?)
+                } else {
+                    None
+                };
 
             let node_id = NodeId::new(NodeIdType::ContentsTable, node_id.index())?;
-            let node = node_btree.find_entry(file, u64::from(u32::from(node_id)))?;
-            let contents_table = UnicodeTableContext::read(file, encoding, &block_btree, node)?;
+            let contents_table =
+                if let Ok(node) = node_btree.find_entry(file, u64::from(u32::from(node_id))) {
+                    Some(UnicodeTableContext::read(
+                        file,
+                        encoding,
+                        &block_btree,
+                        node,
+                    )?)
+                } else {
+                    None
+                };
 
             let node_id = NodeId::new(NodeIdType::AssociatedContentsTable, node_id.index())?;
-            let node = node_btree.find_entry(file, u64::from(u32::from(node_id)))?;
-            let associated_table = UnicodeTableContext::read(file, encoding, &block_btree, node)?;
+            let associated_table =
+                if let Ok(node) = node_btree.find_entry(file, u64::from(u32::from(node_id))) {
+                    Some(UnicodeTableContext::read(
+                        file,
+                        encoding,
+                        &block_btree,
+                        node,
+                    )?)
+                } else {
+                    None
+                };
 
             (
                 properties,
@@ -188,25 +215,25 @@ impl<'a> UnicodeFolder<'a> {
         &self.properties
     }
 
-    pub fn hierarchy_table(&self) -> &UnicodeTableContext {
-        &self.hierarchy_table
+    pub fn hierarchy_table(&self) -> Option<&UnicodeTableContext> {
+        self.hierarchy_table.as_ref()
     }
 
-    pub fn contents_table(&self) -> &UnicodeTableContext {
-        &self.contents_table
+    pub fn contents_table(&self) -> Option<&UnicodeTableContext> {
+        self.contents_table.as_ref()
     }
 
-    pub fn associated_table(&self) -> &UnicodeTableContext {
-        &self.associated_table
+    pub fn associated_table(&self) -> Option<&UnicodeTableContext> {
+        self.associated_table.as_ref()
     }
 }
 
 pub struct AnsiFolder<'a> {
     store: &'a AnsiStore<'a>,
     properties: FolderProperties,
-    hierarchy_table: AnsiTableContext,
-    contents_table: AnsiTableContext,
-    associated_table: AnsiTableContext,
+    hierarchy_table: Option<AnsiTableContext>,
+    contents_table: Option<AnsiTableContext>,
+    associated_table: Option<AnsiTableContext>,
 }
 
 impl<'a> AnsiFolder<'a> {
@@ -262,16 +289,27 @@ impl<'a> AnsiFolder<'a> {
             let properties = FolderProperties { properties };
 
             let node_id = NodeId::new(NodeIdType::HierarchyTable, node_id.index())?;
-            let node = node_btree.find_entry(file, u32::from(node_id))?;
-            let hierarchy_table = AnsiTableContext::read(file, encoding, &block_btree, node)?;
+            let hierarchy_table = if let Ok(node) = node_btree.find_entry(file, u32::from(node_id))
+            {
+                Some(AnsiTableContext::read(file, encoding, &block_btree, node)?)
+            } else {
+                None
+            };
 
             let node_id = NodeId::new(NodeIdType::ContentsTable, node_id.index())?;
-            let node = node_btree.find_entry(file, u32::from(node_id))?;
-            let contents_table = AnsiTableContext::read(file, encoding, &block_btree, node)?;
+            let contents_table = if let Ok(node) = node_btree.find_entry(file, u32::from(node_id)) {
+                Some(AnsiTableContext::read(file, encoding, &block_btree, node)?)
+            } else {
+                None
+            };
 
             let node_id = NodeId::new(NodeIdType::AssociatedContentsTable, node_id.index())?;
-            let node = node_btree.find_entry(file, u32::from(node_id))?;
-            let associated_table = AnsiTableContext::read(file, encoding, &block_btree, node)?;
+            let associated_table = if let Ok(node) = node_btree.find_entry(file, u32::from(node_id))
+            {
+                Some(AnsiTableContext::read(file, encoding, &block_btree, node)?)
+            } else {
+                None
+            };
 
             (
                 properties,
@@ -294,15 +332,15 @@ impl<'a> AnsiFolder<'a> {
         &self.properties
     }
 
-    pub fn hierarchy_table(&self) -> &AnsiTableContext {
-        &self.hierarchy_table
+    pub fn hierarchy_table(&self) -> Option<&AnsiTableContext> {
+        self.hierarchy_table.as_ref()
     }
 
-    pub fn contents_table(&self) -> &AnsiTableContext {
-        &self.contents_table
+    pub fn contents_table(&self) -> Option<&AnsiTableContext> {
+        self.contents_table.as_ref()
     }
 
-    pub fn associated_table(&self) -> &AnsiTableContext {
-        &self.associated_table
+    pub fn associated_table(&self) -> Option<&AnsiTableContext> {
+        self.associated_table.as_ref()
     }
 }
