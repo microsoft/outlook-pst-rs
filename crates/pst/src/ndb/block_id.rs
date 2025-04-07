@@ -82,7 +82,7 @@ impl From<u64> for UnicodeBlockId {
 
 impl From<UnicodeBlockId> for u64 {
     fn from(value: UnicodeBlockId) -> Self {
-        value.0
+        value.0 & !0x1
     }
 }
 
@@ -150,7 +150,7 @@ impl From<u32> for AnsiBlockId {
 
 impl From<AnsiBlockId> for u32 {
     fn from(value: AnsiBlockId) -> Self {
-        value.0
+        value.0 & !0x1
     }
 }
 
