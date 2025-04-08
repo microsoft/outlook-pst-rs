@@ -3,7 +3,7 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
-use super::{block_id::*, block_ref::*, byte_index::*, read_write::*, root::*, *};
+use super::{block_id::*, read_write::*, root::*, *};
 use crate::{crc::compute_crc, AnsiPstFile, PstFile, UnicodePstFile};
 
 /// `dwMagic`
@@ -109,8 +109,6 @@ impl TryFrom<u8> for NdbCryptMethod {
 pub trait Header<Pst>: Clone
 where
     Pst: PstFile,
-    u64: From<<<<Pst as PstFile>::BlockRef as BlockRef>::Block as BlockId>::Index>
-        + From<<<<Pst as PstFile>::BlockRef as BlockRef>::Index as ByteIndex>::Index>,
 {
     fn version(&self) -> NdbVersion;
     fn crypt_method(&self) -> NdbCryptMethod;

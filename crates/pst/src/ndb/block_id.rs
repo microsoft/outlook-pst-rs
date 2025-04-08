@@ -8,11 +8,8 @@ use std::{
 
 use super::{read_write::*, *};
 
-pub trait BlockId: Copy + Sized
-where
-    u64: From<Self::Index>,
-{
-    type Index: Copy + Sized + From<Self>;
+pub trait BlockId: Copy + Sized {
+    type Index: Copy + Sized + From<Self> + Into<u64>;
 
     fn is_internal(&self) -> bool;
     fn index(&self) -> Self::Index;

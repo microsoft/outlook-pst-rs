@@ -68,10 +68,7 @@ impl PageType {
 pub const PAGE_SIZE: usize = 512;
 
 /// [PAGETRAILER](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/f4ccb38a-930a-4db4-98df-a69c195926ba)
-pub trait PageTrailer
-where
-    u64: From<<Self::BlockId as BlockId>::Index>,
-{
+pub trait PageTrailer {
     type BlockId: BlockId + Debug;
 
     fn page_type(&self) -> PageType;
@@ -215,8 +212,6 @@ pub type MapBits = [u8; 496];
 pub trait MapPage<Pst, const PAGE_TYPE: u8>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     fn map_bits(&self) -> &MapBits;
     fn map_bits_mut(&mut self) -> &mut MapBits;
@@ -227,8 +222,6 @@ where
 pub trait AllocationMapPage<Pst>: MapPage<Pst, { PageType::AllocationMap as u8 }>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     fn find_free_bits(&self, max_size: u16) -> Range<u16> {
         let mut max_free_slots = 0..0;
@@ -288,8 +281,6 @@ where
 impl<Pst, Page> AllocationMapPage<Pst> for Page
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Page: MapPage<Pst, { PageType::AllocationMap as u8 }>,
 {
 }
@@ -298,16 +289,12 @@ where
 pub trait AllocationPageMapPage<Pst>: MapPage<Pst, { PageType::AllocationPageMap as u8 }>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
 }
 
 impl<Pst, Page> AllocationPageMapPage<Pst> for Page
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Page: MapPage<Pst, { PageType::AllocationPageMap as u8 }>,
 {
 }
@@ -316,16 +303,12 @@ where
 pub trait FreeMapPage<Pst>: MapPage<Pst, { PageType::FreeMap as u8 }>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
 }
 
 impl<Pst, Page> FreeMapPage<Pst> for Page
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Page: MapPage<Pst, { PageType::FreeMap as u8 }>,
 {
 }
@@ -334,16 +317,12 @@ where
 pub trait FreePageMapPage<Pst>: MapPage<Pst, { PageType::FreePageMap as u8 }>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
 }
 
 impl<Pst, Page> FreePageMapPage<Pst> for Page
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Page: MapPage<Pst, { PageType::FreePageMap as u8 }>,
 {
 }
@@ -715,8 +694,6 @@ const DENSITY_LIST_FILE_OFFSET: u32 = 0x4200;
 pub trait DensityListPage<Pst>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     fn backfill_complete(&self) -> bool;
     fn current_page(&self) -> u32;
@@ -1054,10 +1031,7 @@ pub trait BTreeEntry: Copy + Sized {
 }
 
 /// [BTPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/4f0cd8e7-c2d0-4975-90a4-d417cfca77f8)
-pub trait BTreePage
-where
-    u64: From<<<Self::Trailer as PageTrailer>::BlockId as BlockId>::Index>,
-{
+pub trait BTreePage {
     type Entry: BTreeEntry;
     type Trailer: PageTrailer;
 
@@ -1215,11 +1189,7 @@ impl BTreePageReadWrite for AnsiBTreeEntryPage {
 impl AnsiBTreePageReadWrite<AnsiBTreePageEntry> for AnsiBTreeEntryPage {}
 
 /// [BTENTRY](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/bc8052a3-f300-4022-be31-f0f408fffca0)
-pub trait BTreePageEntry: BTreeEntry
-where
-    u64: From<<<Self::Block as BlockRef>::Block as BlockId>::Index>
-        + From<<<Self::Block as BlockRef>::Index as ByteIndex>::Index>,
-{
+pub trait BTreePageEntry: BTreeEntry {
     type Block: BlockRef;
 
     fn block(&self) -> Self::Block;
@@ -1230,8 +1200,6 @@ where
     Entry: BTreeEntry<Key: BTreePageKeyReadWrite>
         + BTreePageEntry<Block: BlockRefReadWrite<Block: BlockIdReadWrite, Index: ByteIndexReadWrite>>
         + BTreePageEntryReadWrite,
-    u64: From<<<<Entry as BTreePageEntry>::Block as BlockRef>::Block as BlockId>::Index>
-        + From<<<<Entry as BTreePageEntry>::Block as BlockRef>::Index as ByteIndex>::Index>,
 {
     const ENTRY_SIZE: usize = <Entry as BTreePageEntryReadWrite>::ENTRY_SIZE;
 
@@ -1329,11 +1297,7 @@ impl BTreePageEntryReadWrite for AnsiBTreePageEntry {
 }
 
 /// [BBTENTRY](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/53a4b926-8ac4-45c9-9c6d-8358d951dbcd)
-pub trait BlockBTreeEntry: BTreeEntry
-where
-    u64: From<<<Self::Block as BlockRef>::Block as BlockId>::Index>
-        + From<<<Self::Block as BlockRef>::Index as ByteIndex>::Index>,
-{
+pub trait BlockBTreeEntry: BTreeEntry {
     type Block: BlockRef;
 
     fn block(&self) -> Self::Block;
@@ -1635,10 +1599,7 @@ impl BTreePageReadWrite for AnsiBlockBTreePage {
 impl AnsiBTreePageReadWrite<AnsiBlockBTreeEntry> for AnsiBlockBTreePage {}
 
 /// [NBTENTRY](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/53a4b926-8ac4-45c9-9c6d-8358d951dbcd)
-pub trait NodeBTreeEntry: BTreeEntry
-where
-    u64: From<<Self::Block as BlockId>::Index>,
-{
+pub trait NodeBTreeEntry: BTreeEntry {
     type Block: BlockId;
 
     fn node(&self) -> NodeId;
@@ -2041,8 +2002,6 @@ impl AnsiBTreePageReadWrite<AnsiNodeBTreeEntry> for AnsiNodeBTreePage {}
 pub trait RootBTreeIntermediatePage<Pst, Entry, LeafPage>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey>,
     LeafPage: RootBTreeLeafPage<Pst, Entry = Entry>,
     Self: BTreePage<
@@ -2112,8 +2071,6 @@ where
 pub trait RootBTreeLeafPage<Pst>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Self: BTreePage<
         Entry = <Self as RootBTreeLeafPage<Pst>>::Entry,
         Trailer = <Pst as PstFile>::PageTrailer,
@@ -2186,11 +2143,7 @@ impl RootBTreeLeafPageReadWrite<AnsiPstFile> for AnsiNodeBTreePage {
     }
 }
 
-pub trait RootBTree
-where
-    u64: From<<<<Self as RootBTree>::Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<<Self as RootBTree>::Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
-{
+pub trait RootBTree {
     type Pst: PstFile<BTreeKey: BTreeEntryKey>;
     type Entry: BTreeEntry<Key = <Self::Pst as PstFile>::BTreeKey> + Sized;
     type IntermediatePage: RootBTreeIntermediatePage<Self::Pst, Self::Entry, Self::LeafPage>;
@@ -2200,8 +2153,6 @@ where
 pub enum RootBTreePage<Pst, Entry, IntermediatePage, LeafPage>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey>,
     IntermediatePage: RootBTreeIntermediatePage<Pst, Entry, LeafPage>,
     LeafPage: RootBTreeLeafPage<Pst, Entry = Entry>,
@@ -2214,8 +2165,6 @@ impl<Pst, Entry, IntermediatePage, LeafPage> RootBTree
     for RootBTreePage<Pst, Entry, IntermediatePage, LeafPage>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey>,
     IntermediatePage: RootBTreeIntermediatePage<Pst, Entry, LeafPage>,
     LeafPage: RootBTreeLeafPage<Pst, Entry = Entry>,
@@ -2235,8 +2184,6 @@ where
     <Pst as PstFile>::BlockRef: BlockRefReadWrite,
     <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
     <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite + Into<u64>,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey> + BTreeEntryReadWrite,
     IntermediatePage: RootBTreeIntermediatePage<Pst, Entry, LeafPage>,
     LeafPage: RootBTreeLeafPage<Pst, Entry = Entry>,
@@ -2315,8 +2262,6 @@ where
     <Pst as PstFile>::BlockRef: BlockRefReadWrite,
     <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
     <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite + Into<u64>,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey> + BTreeEntryReadWrite,
     IntermediatePage: RootBTreeIntermediatePage<Pst, Entry, LeafPage>,
     LeafPage: RootBTreeLeafPage<Pst, Entry = Entry>,
@@ -2354,8 +2299,6 @@ pub type AnsiBTree<Entry, LeafPage> =
 pub trait BlockBTree<Pst, Entry>: RootBTree<Pst = Pst, Entry = Entry>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey>
         + BlockBTreeEntry<Block = <Pst as PstFile>::BlockRef>,
     <Self as RootBTree>::IntermediatePage:
@@ -2375,8 +2318,6 @@ impl BlockBTreeReadWrite<AnsiPstFile, AnsiBlockBTreeEntry> for AnsiBlockBTree {}
 pub trait NodeBTree<Pst, Entry>: RootBTree<Pst = Pst, Entry = Entry>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey>
         + NodeBTreeEntry<Block = <Pst as PstFile>::BlockId>,
     <Self as RootBTree>::IntermediatePage:

@@ -1,8 +1,5 @@
 use clap::Parser;
-use outlook_pst::{
-    ndb::{block_id::BlockId, byte_index::ByteIndex},
-    *,
-};
+use outlook_pst::*;
 
 mod args;
 
@@ -22,8 +19,6 @@ fn main() -> anyhow::Result<()> {
 fn rebuild_amap<Pst>(pst: &mut Pst)
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     // This will mark the allocation map as invalid.
     pst.start_write()

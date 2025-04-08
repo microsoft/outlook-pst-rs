@@ -64,10 +64,7 @@ impl From<PstError> for io::Error {
 type PstResult<T> = std::result::Result<T, PstError>;
 
 /// [PST File](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/6b57253b-0853-47bb-99bb-d4b8f78105f0)
-pub trait PstFile: Sized
-where
-    u64: From<<Self::BlockId as BlockId>::Index> + From<<Self::ByteIndex as ByteIndex>::Index>,
-{
+pub trait PstFile: Sized {
     type BlockId: BlockId + BlockIdReadWrite;
     type ByteIndex: ByteIndex + ByteIndexReadWrite;
     type BlockRef: BlockRef<Block = Self::BlockId, Index = Self::ByteIndex> + BlockRefReadWrite;
@@ -274,8 +271,6 @@ struct AllocationMapPageInfo<Pst>
 where
     Pst: PstFile,
     <Pst as PstFile>::AllocationMapPage: AllocationMapPageReadWrite<Pst>,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     amap_page: <Pst as PstFile>::AllocationMapPage,
     free_space: u64,
@@ -285,8 +280,6 @@ impl<Pst> AllocationMapPageInfo<Pst>
 where
     Pst: PstFile,
     <Pst as PstFile>::AllocationMapPage: AllocationMapPageReadWrite<Pst>,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     fn max_free_slots(&self) -> u8 {
         u8::try_from(self.amap_page.find_free_bits(0xFF).len()).unwrap_or(0xFF)
@@ -342,8 +335,6 @@ where
     <Self as PstFile>::FreeMapPage: FreeMapPageReadWrite<Self>,
     <Self as PstFile>::FreePageMapPage: FreePageMapPageReadWrite<Self>,
     <Self as PstFile>::DensityListPage: DensityListPageReadWrite<Self>,
-    u64: From<<<Self as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Self as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     fn start_write(&mut self) -> io::Result<()> {
         self.rebuild_allocation_map()?;
@@ -396,7 +387,7 @@ where
             return Ok(());
         }
 
-        let num_amap_pages = u64::from(root.file_eof_index().index()) - AMAP_FIRST_OFFSET;
+        let num_amap_pages = root.file_eof_index().index().into() - AMAP_FIRST_OFFSET;
         let num_amap_pages = num_amap_pages.div_ceil(AMAP_DATA_SIZE);
 
         let mut amap_pages: Vec<_> = (0..num_amap_pages)
@@ -586,9 +577,8 @@ where
             for page in amap_pages.into_iter().map(|info| info.amap_page) {
                 let index: <<Self as PstFile>::BlockId as BlockId>::Index =
                     page.trailer().block_id().into();
-                let index = u64::from(index);
 
-                writer.seek(SeekFrom::Start(index))?;
+                writer.seek(SeekFrom::Start(index.into()))?;
                 <Self::AllocationMapPage as AllocationMapPageReadWrite<Self>>::write(
                     &page, writer,
                 )?;
@@ -597,9 +587,8 @@ where
             for page in pmap_pages.into_iter() {
                 let index: <<Self as PstFile>::BlockId as BlockId>::Index =
                     page.trailer().block_id().into();
-                let index = u64::from(index);
 
-                writer.seek(SeekFrom::Start(index))?;
+                writer.seek(SeekFrom::Start(index.into()))?;
                 <Self::AllocationPageMapPage as AllocationPageMapPageReadWrite<Self>>::write(
                     &page, writer,
                 )?;
@@ -608,18 +597,16 @@ where
             for page in fmap_pages.into_iter() {
                 let index: <<Self as PstFile>::BlockId as BlockId>::Index =
                     page.trailer().block_id().into();
-                let index = u64::from(index);
 
-                writer.seek(SeekFrom::Start(index))?;
+                writer.seek(SeekFrom::Start(index.into()))?;
                 <Self::FreeMapPage as FreeMapPageReadWrite<Self>>::write(&page, writer)?;
             }
 
             for page in fpmap_pages.into_iter() {
                 let index: <<Self as PstFile>::BlockId as BlockId>::Index =
                     page.trailer().block_id().into();
-                let index = u64::from(index);
 
-                writer.seek(SeekFrom::Start(index))?;
+                writer.seek(SeekFrom::Start(index.into()))?;
                 <Self::FreePageMapPage as FreePageMapPageReadWrite<Self>>::write(&page, writer)?;
             }
 
@@ -643,7 +630,7 @@ where
         node_btree: &PstFileReadWriteNodeBTree<Self>,
         amap_pages: &mut Vec<AllocationMapPageInfo<Self>>,
     ) -> io::Result<()> {
-        Self::mark_page_allocation(u64::from(page_index.index()), amap_pages)?;
+        Self::mark_page_allocation(page_index.index().into(), amap_pages)?;
 
         if let RootBTreePage::Intermediate(page, ..) = node_btree {
             for entry in page.entries() {
@@ -663,7 +650,7 @@ where
         block_btree: &PstFileReadWriteBlockBTree<Self>,
         amap_pages: &mut Vec<AllocationMapPageInfo<Self>>,
     ) -> io::Result<()> {
-        Self::mark_page_allocation(u64::from(page_index.index()), amap_pages)?;
+        Self::mark_page_allocation(page_index.index().into(), amap_pages)?;
 
         match block_btree {
             RootBTreePage::Intermediate(page, ..) => {
@@ -681,7 +668,7 @@ where
             RootBTreePage::Leaf(page) => {
                 for entry in page.entries() {
                     Self::mark_block_allocation(
-                        u64::from(entry.block().index().index()),
+                        entry.block().index().index().into(),
                         entry.size(),
                         amap_pages,
                     )?;

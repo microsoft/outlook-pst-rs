@@ -1,6 +1,6 @@
 use clap::Parser;
 use outlook_pst::{
-    ndb::{block_id::BlockId, byte_index::ByteIndex, header::Header, root::Root},
+    ndb::{header::Header, root::Root},
     *,
 };
 use std::fmt::Debug;
@@ -25,8 +25,6 @@ where
     Pst: PstFile,
     <Pst as PstFile>::ByteIndex: Debug,
     <Pst as PstFile>::BlockRef: Debug,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     let header = pst.header();
     let version = header.version();

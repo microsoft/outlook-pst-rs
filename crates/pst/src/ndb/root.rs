@@ -2,7 +2,7 @@
 
 use std::fmt::Debug;
 
-use super::{block_id::*, block_ref::*, byte_index::*, read_write::*, *};
+use super::{block_ref::*, byte_index::*, read_write::*, *};
 use crate::{AnsiPstFile, PstFile, UnicodePstFile};
 
 /// `fAMapValid`
@@ -43,8 +43,6 @@ impl From<AmapStatus> for bool {
 pub trait Root<Pst>
 where
     Pst: PstFile,
-    u64: From<<<<Pst as PstFile>::BlockRef as BlockRef>::Block as BlockId>::Index>
-        + From<<<<Pst as PstFile>::BlockRef as BlockRef>::Index as ByteIndex>::Index>,
 {
     fn file_eof_index(&self) -> &<<Pst as PstFile>::BlockRef as BlockRef>::Index;
     fn amap_last_index(&self) -> &<<Pst as PstFile>::BlockRef as BlockRef>::Index;

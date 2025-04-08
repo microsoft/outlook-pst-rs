@@ -20,18 +20,12 @@ pub trait NodeIdReadWrite: Copy + Sized {
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
 }
 
-pub trait BlockIdReadWrite: BlockId + Copy + Sized
-where
-    u64: From<<Self as BlockId>::Index>,
-{
+pub trait BlockIdReadWrite: BlockId + Copy + Sized {
     fn read(f: &mut dyn Read) -> io::Result<Self>;
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
 }
 
-pub trait ByteIndexReadWrite: ByteIndex + Copy + Sized
-where
-    u64: From<<Self as ByteIndex>::Index>,
-{
+pub trait ByteIndexReadWrite: ByteIndex + Copy + Sized {
     fn new(index: Self::Index) -> Self;
     fn read(f: &mut dyn Read) -> io::Result<Self>;
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
@@ -41,8 +35,6 @@ pub trait BlockRefReadWrite: BlockRef + Copy + Sized
 where
     <Self as BlockRef>::Block: BlockIdReadWrite,
     <Self as BlockRef>::Index: ByteIndexReadWrite,
-    u64: From<<<Self as BlockRef>::Block as BlockId>::Index>
-        + From<<<Self as BlockRef>::Index as ByteIndex>::Index>,
 {
     fn new(block: Self::Block, index: Self::Index) -> Self;
 
@@ -63,8 +55,6 @@ where
     Pst: PstFile,
     <Pst as PstFile>::ByteIndex: ByteIndexReadWrite,
     <Pst as PstFile>::BlockRef: BlockRefReadWrite,
-    u64: From<<<<Pst as PstFile>::BlockRef as BlockRef>::Block as BlockId>::Index>
-        + From<<<<Pst as PstFile>::BlockRef as BlockRef>::Index as ByteIndex>::Index>,
 {
     fn new(
         file_eof_index: <Pst as PstFile>::ByteIndex,
@@ -127,8 +117,6 @@ pub trait HeaderReadWrite<Pst>: Header<Pst> + Sized
 where
     Pst: PstFile,
     <Pst as PstFile>::Root: Root<Pst> + RootReadWrite<Pst>,
-    u64: From<<<<Pst as PstFile>::BlockRef as BlockRef>::Block as BlockId>::Index>
-        + From<<<<Pst as PstFile>::BlockRef as BlockRef>::Index as ByteIndex>::Index>,
 {
     fn read(f: &mut dyn Read) -> io::Result<Self>;
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
@@ -136,10 +124,7 @@ where
     fn first_free_map(&mut self) -> &mut [u8];
 }
 
-pub trait PageTrailerReadWrite: PageTrailer + Copy + Sized
-where
-    u64: From<<<Self as PageTrailer>::BlockId as BlockId>::Index>,
-{
+pub trait PageTrailerReadWrite: PageTrailer + Copy + Sized {
     fn new(page_type: PageType, signature: u16, block_id: Self::BlockId, crc: u32) -> Self;
     fn read(f: &mut dyn Read) -> io::Result<Self>;
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
@@ -148,8 +133,6 @@ where
 pub trait MapPageReadWrite<Pst, const PAGE_TYPE: u8>: MapPage<Pst, PAGE_TYPE> + Sized
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     fn new(amap_bits: MapBits, trailer: Pst::PageTrailer) -> NdbResult<Self>;
     fn read(f: &mut dyn Read) -> io::Result<Self>;
@@ -160,8 +143,6 @@ pub trait AllocationMapPageReadWrite<Pst>:
     MapPageReadWrite<Pst, { PageType::AllocationMap as u8 }>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     fn new(amap_bits: MapBits, trailer: Pst::PageTrailer) -> NdbResult<Self> {
         <Self as MapPageReadWrite<Pst, { PageType::AllocationMap as u8 }>>::new(amap_bits, trailer)
@@ -179,8 +160,6 @@ where
 impl<Pst, Page> AllocationMapPageReadWrite<Pst> for Page
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Page: MapPageReadWrite<Pst, { PageType::AllocationMap as u8 }>,
 {
 }
@@ -189,8 +168,6 @@ pub trait AllocationPageMapPageReadWrite<Pst>:
     MapPageReadWrite<Pst, { PageType::AllocationPageMap as u8 }>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     fn new(amap_bits: MapBits, trailer: Pst::PageTrailer) -> NdbResult<Self> {
         <Self as MapPageReadWrite<Pst, { PageType::AllocationPageMap as u8 }>>::new(
@@ -210,8 +187,6 @@ where
 impl<Pst, Page> AllocationPageMapPageReadWrite<Pst> for Page
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Page: MapPageReadWrite<Pst, { PageType::AllocationPageMap as u8 }>,
 {
 }
@@ -219,8 +194,6 @@ where
 pub trait FreeMapPageReadWrite<Pst>: MapPageReadWrite<Pst, { PageType::FreeMap as u8 }>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     fn new(amap_bits: MapBits, trailer: Pst::PageTrailer) -> NdbResult<Self> {
         <Self as MapPageReadWrite<Pst, { PageType::FreeMap as u8 }>>::new(amap_bits, trailer)
@@ -238,8 +211,6 @@ where
 impl<Pst, Page> FreeMapPageReadWrite<Pst> for Page
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Page: MapPageReadWrite<Pst, { PageType::FreeMap as u8 }>,
 {
 }
@@ -248,8 +219,6 @@ pub trait FreePageMapPageReadWrite<Pst>:
     MapPageReadWrite<Pst, { PageType::FreePageMap as u8 }>
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     fn new(amap_bits: MapBits, trailer: Pst::PageTrailer) -> NdbResult<Self> {
         <Self as MapPageReadWrite<Pst, { PageType::FreePageMap as u8 }>>::new(amap_bits, trailer)
@@ -267,8 +236,6 @@ where
 impl<Pst, Page> FreePageMapPageReadWrite<Pst> for Page
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Page: MapPageReadWrite<Pst, { PageType::FreePageMap as u8 }>,
 {
 }
@@ -276,8 +243,6 @@ where
 pub trait DensityListPageReadWrite<Pst>: DensityListPage<Pst> + Sized
 where
     Pst: PstFile,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     fn new(
         backfill_complete: bool,
@@ -301,11 +266,7 @@ pub trait BTreeEntryReadWrite: BTreeEntry + Copy + Sized + Default {
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
 }
 
-pub trait BlockBTreeEntryReadWrite: BlockBTreeEntry + BTreeEntryReadWrite
-where
-    u64: From<<<<Self as BlockBTreeEntry>::Block as BlockRef>::Block as BlockId>::Index>
-        + From<<<<Self as BlockBTreeEntry>::Block as BlockRef>::Index as ByteIndex>::Index>,
-{
+pub trait BlockBTreeEntryReadWrite: BlockBTreeEntry + BTreeEntryReadWrite {
     fn new(block: Self::Block, size: u16) -> Self;
 }
 
@@ -315,8 +276,6 @@ where
     <Self as BTreeEntry>::Key: BTreePageKeyReadWrite,
     <Self as BTreePageEntry>::Block:
         BlockRef<Block: BlockIdReadWrite, Index: ByteIndexReadWrite> + BlockRefReadWrite,
-    u64: From<<<<Self as BTreePageEntry>::Block as BlockRef>::Block as BlockId>::Index>
-        + From<<<<Self as BTreePageEntry>::Block as BlockRef>::Index as ByteIndex>::Index>,
 {
     const ENTRY_SIZE: usize;
 
@@ -332,10 +291,7 @@ where
     }
 }
 
-pub trait BTreePageReadWrite: BTreePage + Sized
-where
-    u64: From<<<<Self as BTreePage>::Trailer as PageTrailer>::BlockId as BlockId>::Index>,
-{
+pub trait BTreePageReadWrite: BTreePage + Sized {
     fn new(
         level: u8,
         max_entries: u8,
@@ -582,10 +538,7 @@ where
     }
 }
 
-pub trait NodeBTreeEntryReadWrite: NodeBTreeEntry + BTreeEntryReadWrite
-where
-    u64: From<<<Self as NodeBTreeEntry>::Block as BlockId>::Index>,
-{
+pub trait NodeBTreeEntryReadWrite: NodeBTreeEntry + BTreeEntryReadWrite {
     fn new(
         node: NodeId,
         data: <Self as NodeBTreeEntry>::Block,
@@ -594,10 +547,7 @@ where
     ) -> Self;
 }
 
-pub trait BlockTrailerReadWrite: BlockTrailer + Copy + Sized
-where
-    u64: From<<<Self as BlockTrailer>::BlockId as BlockId>::Index>,
-{
+pub trait BlockTrailerReadWrite: BlockTrailer + Copy + Sized {
     const SIZE: u16;
 
     fn new(size: u16, signature: u16, crc: u32, block_id: Self::BlockId) -> NdbResult<Self>;
@@ -608,7 +558,6 @@ where
 pub trait BlockReadWrite: Block + Sized
 where
     <Self as Block>::Trailer: BlockTrailerReadWrite,
-    u64: From<<<<Self as Block>::Trailer as BlockTrailer>::BlockId as BlockId>::Index>,
 {
     fn new(encoding: NdbCryptMethod, data: Vec<u8>, trailer: Self::Trailer) -> NdbResult<Self>;
 
@@ -701,9 +650,6 @@ where
     <Self as IntermediateTreeBlock>::Header: IntermediateTreeHeaderReadWrite,
     <Self as IntermediateTreeBlock>::Entry: IntermediateTreeEntryReadWrite,
     <Self as IntermediateTreeBlock>::Trailer: BlockTrailerReadWrite,
-    u64: From<
-        <<<Self as IntermediateTreeBlock>::Trailer as BlockTrailer>::BlockId as BlockId>::Index,
-    >,
 {
     fn new(
         header: Self::Header,
@@ -802,8 +748,6 @@ where
     >,
     <Self as RootBTree>::LeafPage:
         RootBTreeLeafPageReadWrite<<Self as RootBTree>::Pst> + BTreePageReadWrite,
-    u64: From<<<<Self as RootBTree>::Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<<Self as RootBTree>::Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     fn read<R: Read + Seek>(
         f: &mut R,
@@ -830,8 +774,6 @@ where
     <Pst as PstFile>::BlockRef: BlockRefReadWrite,
     <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
     <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey> + BTreeEntryReadWrite,
     LeafPage: RootBTreeLeafPage<Pst, Entry = Entry> + RootBTreeLeafPageReadWrite<Pst>,
 {
@@ -847,8 +789,6 @@ where
     <Pst as PstFile>::BlockRef: BlockRefReadWrite,
     <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
     <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     <Self as RootBTreeLeafPage<Pst>>::Entry: BTreeEntryReadWrite,
 {
     const BTREE_ENTRIES_SIZE: usize;
@@ -865,8 +805,6 @@ where
     <Pst as PstFile>::BlockRef: BlockRefReadWrite,
     <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
     <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey>
         + BTreeEntryReadWrite
         + BlockBTreeEntry<Block = <Pst as PstFile>::BlockRef>,
@@ -885,8 +823,6 @@ where
     <Pst as PstFile>::BlockRef: BlockRefReadWrite,
     <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
     <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
     Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey>
         + BTreeEntryReadWrite
         + NodeBTreeEntry<Block = <Pst as PstFile>::BlockId>,

@@ -12,12 +12,12 @@ fn main() -> anyhow::Result<()> {
     if let Ok(pst) = UnicodePstFile::open(&args.file) {
         let store = UnicodeStore::read(&pst).unwrap();
         let properties = store.properties();
-        read_store_props(&properties)
+        read_store_props(properties)
     } else {
         let pst = AnsiPstFile::open(&args.file)?;
         let store = AnsiStore::read(&pst)?;
         let properties = store.properties();
-        read_store_props(&properties)
+        read_store_props(properties)
     }
 }
 

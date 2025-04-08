@@ -22,10 +22,7 @@ pub const fn block_size(size: u16) -> u16 {
 }
 
 /// [BLOCKTRAILER](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/a14943ef-70c2-403f-898c-5bc3747117e1)
-pub trait BlockTrailer
-where
-    u64: From<<Self::BlockId as BlockId>::Index>,
-{
+pub trait BlockTrailer {
     type BlockId: BlockId;
 
     fn size(&self) -> u16;
@@ -215,10 +212,7 @@ impl BlockTrailerReadWrite for AnsiBlockTrailer {
 }
 
 /// [Data Blocks](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/d0e6fbaf-00e3-4d4d-bea8-8ab3cdb4fde6)
-pub trait Block
-where
-    u64: From<<<Self::Trailer as BlockTrailer>::BlockId as BlockId>::Index>,
-{
+pub trait Block {
     type Trailer: BlockTrailer;
 
     fn encoding(&self) -> NdbCryptMethod;
@@ -339,10 +333,7 @@ pub trait IntermediateTreeHeader {
 
 pub trait IntermediateTreeEntry {}
 
-pub trait IntermediateTreeBlock
-where
-    u64: From<<<Self::Trailer as BlockTrailer>::BlockId as BlockId>::Index>,
-{
+pub trait IntermediateTreeBlock {
     type Header: IntermediateTreeHeader;
     type Entry: IntermediateTreeEntry;
     type Trailer: BlockTrailer;
@@ -495,7 +486,6 @@ struct DataTreeBlockInner<Entry, Trailer>
 where
     Entry: IntermediateTreeEntry,
     Trailer: BlockTrailer,
-    u64: From<<<Trailer as BlockTrailer>::BlockId as BlockId>::Index>,
 {
     header: DataTreeBlockHeader,
     entries: Vec<Entry>,
@@ -506,7 +496,6 @@ impl<Entry, Trailer> DataTreeBlockInner<Entry, Trailer>
 where
     Entry: IntermediateTreeEntry,
     Trailer: BlockTrailer,
-    u64: From<<<Trailer as BlockTrailer>::BlockId as BlockId>::Index>,
 {
     pub fn new(
         header: DataTreeBlockHeader,
@@ -818,7 +807,6 @@ impl IntermediateTreeHeaderReadWrite for AnsiSubNodeTreeBlockHeader {
 pub struct LeafSubNodeTreeEntry<Block>
 where
     Block: BlockId,
-    u64: From<<Block as BlockId>::Index>,
 {
     inner: IntermediateSubNodeTreeEntry<Block>,
     sub_node: Option<Block>,
@@ -827,7 +815,6 @@ where
 impl<Block> LeafSubNodeTreeEntry<Block>
 where
     Block: BlockId,
-    u64: From<<Block as BlockId>::Index>,
 {
     pub fn new(node: NodeId, block: Block, sub_node: Option<Block>) -> Self {
         Self {
@@ -903,7 +890,6 @@ impl IntermediateTreeEntryReadWrite for AnsiLeafSubNodeTreeEntry {
 pub struct IntermediateSubNodeTreeEntry<Block>
 where
     Block: BlockId,
-    u64: From<<Block as BlockId>::Index>,
 {
     node: NodeId,
     block: Block,
@@ -912,7 +898,6 @@ where
 impl<Block> IntermediateSubNodeTreeEntry<Block>
 where
     Block: BlockId,
-    u64: From<<Block as BlockId>::Index>,
 {
     pub fn new(node: NodeId, block: Block) -> Self {
         Self { node, block }
@@ -971,7 +956,6 @@ where
     Header: IntermediateTreeHeader,
     Entry: IntermediateTreeEntry,
     Trailer: BlockTrailer,
-    u64: From<<<Trailer as BlockTrailer>::BlockId as BlockId>::Index>,
 {
     header: Header,
     entries: Vec<Entry>,
@@ -983,7 +967,6 @@ where
     Header: IntermediateTreeHeader,
     Entry: IntermediateTreeEntry,
     Trailer: BlockTrailer,
-    u64: From<<<Trailer as BlockTrailer>::BlockId as BlockId>::Index>,
 {
     pub fn new(header: Header, entries: Vec<Entry>, trailer: Trailer) -> NdbResult<Self> {
         trailer.verify_block_id(true)?;
@@ -1001,7 +984,6 @@ where
     Header: IntermediateTreeHeader,
     Entry: IntermediateTreeEntry,
     Trailer: BlockTrailer,
-    u64: From<<<Trailer as BlockTrailer>::BlockId as BlockId>::Index>,
 {
     type Header = Header;
     type Entry = Entry;
@@ -1026,7 +1008,6 @@ where
     Header: IntermediateTreeHeaderReadWrite,
     Entry: IntermediateTreeEntryReadWrite,
     Trailer: BlockTrailerReadWrite,
-    u64: From<<<Trailer as BlockTrailer>::BlockId as BlockId>::Index>,
 {
     fn new(header: Header, entries: Vec<Entry>, trailer: Trailer) -> NdbResult<Self> {
         Self::new(header, entries, trailer)

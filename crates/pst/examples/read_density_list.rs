@@ -1,8 +1,5 @@
 use clap::Parser;
-use outlook_pst::{
-    ndb::{block_id::BlockId, byte_index::ByteIndex, page::PageTrailer},
-    *,
-};
+use outlook_pst::{ndb::page::PageTrailer, *};
 use std::fmt::Debug;
 
 mod args;
@@ -24,8 +21,6 @@ where
     Pst: PstFile,
     <Pst as PstFile>::BlockId: Debug,
     <Pst as PstFile>::ByteIndex: Debug,
-    u64: From<<<Pst as PstFile>::BlockId as BlockId>::Index>
-        + From<<<Pst as PstFile>::ByteIndex as ByteIndex>::Index>,
 {
     let density_list = pst.density_list();
     let density_list = match density_list {

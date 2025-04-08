@@ -2,10 +2,7 @@
 
 use super::{block_id::*, byte_index::*, read_write::*};
 
-pub trait BlockRef
-where
-    u64: From<<Self::Block as BlockId>::Index> + From<<Self::Index as ByteIndex>::Index>,
-{
+pub trait BlockRef {
     type Block: BlockId;
     type Index: ByteIndex;
 
