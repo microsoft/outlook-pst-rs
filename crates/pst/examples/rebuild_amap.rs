@@ -21,13 +21,12 @@ where
     Pst: PstFile,
 {
     // This will mark the allocation map as invalid.
-    pst.start_write()
-        .expect("Failed to start write transaction");
+    let writer = pst.lock().expect("Failed to lock file for writing");
+    std::mem::forget(writer);
 
     // Since the allocation map is marked as invalid, this will rebuild it.
-    pst.start_write().expect("Failed to rebuild allocation map");
+    let writer = pst.lock().expect("Failed to rebuild allocation map");
 
     // This will mark the allocation map as valid.
-    pst.finish_write()
-        .expect("Failed to finish write transaction");
+    std::mem::drop(writer);
 }

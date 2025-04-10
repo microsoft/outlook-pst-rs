@@ -5,7 +5,7 @@ use std::{
     io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     mem,
     path::Path,
-    sync::Mutex,
+    sync::{Mutex, MutexGuard},
 };
 use thiserror::Error;
 
@@ -63,6 +63,50 @@ impl From<PstError> for io::Error {
 
 type PstResult<T> = std::result::Result<T, PstError>;
 
+trait PstFileLock<Pst>
+where
+    Pst: PstFile,
+{
+    fn writer(&mut self) -> &PstResult<Mutex<BufWriter<File>>>;
+    fn start_write(&mut self) -> io::Result<()>;
+    fn finish_write(&mut self) -> io::Result<()>;
+}
+
+pub struct PstFileLockGuard<'a, Pst>
+where
+    Pst: PstFile,
+{
+    pst: &'a mut dyn PstFileLock<Pst>,
+}
+
+impl<'a, Pst> PstFileLockGuard<'a, Pst>
+where
+    Pst: PstFile,
+{
+    fn new(pst: &'a mut dyn PstFileLock<Pst>) -> io::Result<Self> {
+        pst.start_write()?;
+        Ok(Self { pst })
+    }
+
+    pub fn writer(&'a mut self) -> io::Result<MutexGuard<'a, BufWriter<File>>> {
+        Ok(self
+            .pst
+            .writer()
+            .as_ref()?
+            .lock()
+            .map_err(|_| PstError::LockError)?)
+    }
+}
+
+impl<Pst> Drop for PstFileLockGuard<'_, Pst>
+where
+    Pst: PstFile,
+{
+    fn drop(&mut self) {
+        let _ = self.pst.finish_write();
+    }
+}
+
 /// [PST File](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/6b57253b-0853-47bb-99bb-d4b8f78105f0)
 pub trait PstFile: Sized {
     type BlockId: BlockId + BlockIdReadWrite;
@@ -84,14 +128,10 @@ pub trait PstFile: Sized {
     type FreePageMapPage: FreePageMapPage<Self>;
     type DensityListPage: DensityListPage<Self>;
 
-    fn reader(&self) -> &Mutex<BufReader<File>>;
-    fn writer(&mut self) -> &PstResult<Mutex<BufWriter<File>>>;
     fn header(&self) -> &Self::Header;
-    fn header_mut(&mut self) -> &mut Self::Header;
     fn density_list(&self) -> Result<&dyn DensityListPage<Self>, &io::Error>;
-
-    fn start_write(&mut self) -> io::Result<()>;
-    fn finish_write(&mut self) -> io::Result<()>;
+    fn reader(&self) -> &Mutex<BufReader<File>>;
+    fn lock(&mut self) -> io::Result<PstFileLockGuard<Self>>;
 }
 
 pub struct UnicodePstFile {
@@ -123,6 +163,20 @@ impl UnicodePstFile {
     }
 }
 
+impl PstFileLock<UnicodePstFile> for UnicodePstFile {
+    fn writer(&mut self) -> &PstResult<Mutex<BufWriter<File>>> {
+        &self.writer
+    }
+
+    fn start_write(&mut self) -> io::Result<()> {
+        <Self as PstFileReadWrite>::start_write(self)
+    }
+
+    fn finish_write(&mut self) -> io::Result<()> {
+        <Self as PstFileReadWrite>::finish_write(self)
+    }
+}
+
 impl PstFile for UnicodePstFile {
     type BlockId = UnicodeBlockId;
     type ByteIndex = UnicodeByteIndex;
@@ -143,32 +197,20 @@ impl PstFile for UnicodePstFile {
     type FreePageMapPage = UnicodeMapPage<{ PageType::FreePageMap as u8 }>;
     type DensityListPage = UnicodeDensityListPage;
 
-    fn reader(&self) -> &Mutex<BufReader<File>> {
-        &self.reader
-    }
-
-    fn writer(&mut self) -> &PstResult<Mutex<BufWriter<File>>> {
-        &self.writer
-    }
-
     fn header(&self) -> &Self::Header {
         &self.header
-    }
-
-    fn header_mut(&mut self) -> &mut Self::Header {
-        &mut self.header
     }
 
     fn density_list(&self) -> Result<&dyn DensityListPage<Self>, &io::Error> {
         self.density_list.as_ref().map(|dl| dl as _)
     }
 
-    fn start_write(&mut self) -> io::Result<()> {
-        <Self as PstFileReadWrite>::start_write(self)
+    fn reader(&self) -> &Mutex<BufReader<File>> {
+        &self.reader
     }
 
-    fn finish_write(&mut self) -> io::Result<()> {
-        <Self as PstFileReadWrite>::finish_write(self)
+    fn lock(&mut self) -> io::Result<PstFileLockGuard<Self>> {
+        PstFileLockGuard::new(self)
     }
 }
 
@@ -199,6 +241,20 @@ impl AnsiPstFile {
     }
 }
 
+impl PstFileLock<AnsiPstFile> for AnsiPstFile {
+    fn writer(&mut self) -> &PstResult<Mutex<BufWriter<File>>> {
+        &self.writer
+    }
+
+    fn start_write(&mut self) -> io::Result<()> {
+        <Self as PstFileReadWrite>::start_write(self)
+    }
+
+    fn finish_write(&mut self) -> io::Result<()> {
+        <Self as PstFileReadWrite>::finish_write(self)
+    }
+}
+
 impl PstFile for AnsiPstFile {
     type BlockId = AnsiBlockId;
     type ByteIndex = AnsiByteIndex;
@@ -219,32 +275,20 @@ impl PstFile for AnsiPstFile {
     type FreePageMapPage = AnsiMapPage<{ PageType::FreePageMap as u8 }>;
     type DensityListPage = AnsiDensityListPage;
 
-    fn reader(&self) -> &Mutex<BufReader<File>> {
-        &self.reader
-    }
-
-    fn writer(&mut self) -> &PstResult<Mutex<BufWriter<File>>> {
-        &self.writer
-    }
-
     fn header(&self) -> &Self::Header {
         &self.header
-    }
-
-    fn header_mut(&mut self) -> &mut Self::Header {
-        &mut self.header
     }
 
     fn density_list(&self) -> Result<&dyn DensityListPage<Self>, &io::Error> {
         self.density_list.as_ref().map(|dl| dl as _)
     }
 
-    fn start_write(&mut self) -> io::Result<()> {
-        <Self as PstFileReadWrite>::start_write(self)
+    fn reader(&self) -> &Mutex<BufReader<File>> {
+        &self.reader
     }
 
-    fn finish_write(&mut self) -> io::Result<()> {
-        <Self as PstFileReadWrite>::finish_write(self)
+    fn lock(&mut self) -> io::Result<PstFileLockGuard<Self>> {
+        PstFileLockGuard::new(self)
     }
 }
 
@@ -300,7 +344,7 @@ type PstFileReadWriteBlockBTree<Pst> = RootBTreePage<
     <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
 >;
 
-trait PstFileReadWrite: PstFile
+trait PstFileReadWrite: PstFile + PstFileLock<Self>
 where
     <Self as PstFile>::BlockId:
         From<<<Self as PstFile>::ByteIndex as ByteIndex>::Index> + BlockIdReadWrite,
@@ -336,6 +380,8 @@ where
     <Self as PstFile>::FreePageMapPage: FreePageMapPageReadWrite<Self>,
     <Self as PstFile>::DensityListPage: DensityListPageReadWrite<Self>,
 {
+    fn header_mut(&mut self) -> &mut <Self as PstFile>::Header;
+
     fn start_write(&mut self) -> io::Result<()> {
         self.rebuild_allocation_map()?;
 
@@ -613,14 +659,25 @@ where
             writer.flush()?;
         }
 
-        let header = self.header_mut();
-        <<Self as PstFile>::Header as HeaderReadWrite<Self>>::first_free_map(header)
-            .copy_from_slice(&first_fmap);
-        let root = header.root_mut();
-        root.reset_free_size(free_bytes)?;
-        root.set_amap_status(AmapStatus::Valid2);
+        let header = {
+            let header = self.header_mut();
+            <<Self as PstFile>::Header as HeaderReadWrite<Self>>::first_free_map(header)
+                .copy_from_slice(&first_fmap);
+            let root = header.root_mut();
+            root.reset_free_size(free_bytes)?;
+            root.set_amap_status(AmapStatus::Valid2);
+            header.clone()
+        };
 
-        Ok(())
+        let mut writer = self
+            .writer()
+            .as_ref()?
+            .lock()
+            .map_err(|_| PstError::LockError)?;
+        let writer = &mut *writer;
+        writer.seek(SeekFrom::Start(0))?;
+        header.write(writer)?;
+        writer.flush()
     }
 
     fn mark_node_btree_allocations<R: Read + Seek>(
@@ -774,5 +831,14 @@ where
     }
 }
 
-impl PstFileReadWrite for UnicodePstFile {}
-impl PstFileReadWrite for AnsiPstFile {}
+impl PstFileReadWrite for UnicodePstFile {
+    fn header_mut(&mut self) -> &mut <Self as PstFile>::Header {
+        &mut self.header
+    }
+}
+
+impl PstFileReadWrite for AnsiPstFile {
+    fn header_mut(&mut self) -> &mut <Self as PstFile>::Header {
+        &mut self.header
+    }
+}
