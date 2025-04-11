@@ -7,11 +7,6 @@ cross-platform reference implementation that's compatible with the `mspst32.dll`
 provider on Windows. Maintaining portability across operating systems and processor architectures
 is a top priority for this project.
 
-The API exposed by these crates is still very experimental and subject to breaking changes until
-each crate reaches its 1.0 release. These crates should eventually support creating new PST files
-and/or modifying existing ones as well, but that will likely wait until we're confident in the API
-for read-only support first.
-
 ## Contributing
 
 This project welcomes contributions and suggestions.  Most contributions require you to agree to a

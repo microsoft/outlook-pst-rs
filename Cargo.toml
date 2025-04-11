@@ -24,6 +24,6 @@ anyhow = "1"
 byteorder = "1"
 clap = { version = "4", features = ["derive"] }
 codepage-strings = "1"
-crossterm = "0.28.1"
-ratatui = "0.29.0"
+crossterm = "0.29"
+ratatui = "0.29"
 thiserror = "2"
