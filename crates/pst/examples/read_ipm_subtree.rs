@@ -3,14 +3,14 @@ use outlook_pst::{
     messaging::{folder::UnicodeFolder, store::UnicodeStore},
     *,
 };
-use std::sync::Arc;
+use std::rc::Rc;
 
 mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
     let pst = UnicodePstFile::open(&args.file).unwrap();
-    let store = UnicodeStore::read(Arc::new(pst)).unwrap();
+    let store = UnicodeStore::read(Rc::new(pst)).unwrap();
     let ipm_sub_tree = store.properties().ipm_sub_tree_entry_id()?;
     let folder = UnicodeFolder::read(store.clone(), &ipm_sub_tree)?;
     let hierarchy_table = folder.hierarchy_table().ok_or(anyhow::anyhow!(

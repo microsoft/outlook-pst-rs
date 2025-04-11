@@ -5,7 +5,7 @@ use std::{
     collections::BTreeMap,
     fmt::Debug,
     io::{self, Read, Write},
-    sync::Arc,
+    rc::Rc,
 };
 
 use super::{read_write::*, *};
@@ -237,14 +237,14 @@ impl StoreProperties {
 }
 
 pub struct UnicodeStore {
-    pst: Arc<UnicodePstFile>,
+    pst: Rc<UnicodePstFile>,
     node_btree: UnicodeNodeBTree,
     block_btree: UnicodeBlockBTree,
     properties: StoreProperties,
 }
 
 impl UnicodeStore {
-    pub fn pst(&self) -> &Arc<UnicodePstFile> {
+    pub fn pst(&self) -> &Rc<UnicodePstFile> {
         &self.pst
     }
 
@@ -256,7 +256,7 @@ impl UnicodeStore {
         &self.block_btree
     }
 
-    pub fn read(pst: Arc<UnicodePstFile>) -> io::Result<Arc<Self>> {
+    pub fn read(pst: Rc<UnicodePstFile>) -> io::Result<Rc<Self>> {
         let header = pst.header();
         let root = header.root();
 
@@ -293,7 +293,7 @@ impl UnicodeStore {
             (node_btree, block_btree, properties)
         };
 
-        Ok(Arc::new(Self {
+        Ok(Rc::new(Self {
             pst,
             node_btree,
             block_btree,
@@ -349,14 +349,14 @@ impl UnicodeStore {
 }
 
 pub struct AnsiStore {
-    pst: Arc<AnsiPstFile>,
+    pst: Rc<AnsiPstFile>,
     node_btree: AnsiNodeBTree,
     block_btree: AnsiBlockBTree,
     properties: StoreProperties,
 }
 
 impl AnsiStore {
-    pub fn pst(&self) -> &Arc<AnsiPstFile> {
+    pub fn pst(&self) -> &Rc<AnsiPstFile> {
         &self.pst
     }
 
@@ -368,7 +368,7 @@ impl AnsiStore {
         &self.block_btree
     }
 
-    pub fn read(pst: Arc<AnsiPstFile>) -> io::Result<Arc<Self>> {
+    pub fn read(pst: Rc<AnsiPstFile>) -> io::Result<Rc<Self>> {
         let header = pst.header();
         let root = header.root();
 
@@ -405,7 +405,7 @@ impl AnsiStore {
             (node_btree, block_btree, properties)
         };
 
-        Ok(Arc::new(Self {
+        Ok(Rc::new(Self {
             pst,
             node_btree,
             block_btree,

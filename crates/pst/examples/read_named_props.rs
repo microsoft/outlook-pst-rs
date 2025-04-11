@@ -8,14 +8,14 @@ use outlook_pst::{
     },
     *,
 };
-use std::sync::Arc;
+use std::rc::Rc;
 
 mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
     let pst = UnicodePstFile::open(&args.file).unwrap();
-    let store = UnicodeStore::read(Arc::new(pst)).unwrap();
+    let store = UnicodeStore::read(Rc::new(pst)).unwrap();
     let named_props = UnicodeNamedPropertyMap::read(store).unwrap();
     let properties = named_props.properties();
 

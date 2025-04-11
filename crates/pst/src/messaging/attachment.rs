@@ -1,6 +1,6 @@
 //! ## [Attachment Objects](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/46eb4828-c6a5-420d-a137-9ee36df317c1)
 
-use std::{collections::BTreeMap, io, sync::Arc};
+use std::{collections::BTreeMap, io, rc::Rc};
 
 use super::{message::*, *};
 use crate::{
@@ -129,26 +129,26 @@ impl TryFrom<i32> for AttachmentMethod {
 
 pub enum UnicodeAttachmentData {
     Binary(BinaryValue),
-    Message(Arc<UnicodeMessage>),
+    Message(Rc<UnicodeMessage>),
     Storage(UnicodeBlockBTreeEntry),
 }
 
 pub struct UnicodeAttachment {
-    message: Arc<UnicodeMessage>,
+    message: Rc<UnicodeMessage>,
     properties: AttachmentProperties,
     data: Option<UnicodeAttachmentData>,
 }
 
 impl UnicodeAttachment {
-    pub fn message(&self) -> &Arc<UnicodeMessage> {
+    pub fn message(&self) -> &Rc<UnicodeMessage> {
         &self.message
     }
 
     pub fn read(
-        message: Arc<UnicodeMessage>,
+        message: Rc<UnicodeMessage>,
         sub_node: NodeId,
         prop_ids: Option<&[u16]>,
-    ) -> io::Result<Arc<Self>> {
+    ) -> io::Result<Rc<Self>> {
         let node_id_type = sub_node.id_type()?;
         match node_id_type {
             NodeIdType::Attachment => {}
@@ -268,7 +268,7 @@ impl UnicodeAttachment {
             (properties, data)
         };
 
-        Ok(Arc::new(Self {
+        Ok(Rc::new(Self {
             message,
             properties,
             data,
@@ -286,26 +286,26 @@ impl UnicodeAttachment {
 
 pub enum AnsiAttachmentData {
     Binary(BinaryValue),
-    Message(Arc<AnsiMessage>),
+    Message(Rc<AnsiMessage>),
     Storage(AnsiBlockBTreeEntry),
 }
 
 pub struct AnsiAttachment {
-    message: Arc<AnsiMessage>,
+    message: Rc<AnsiMessage>,
     properties: AttachmentProperties,
     data: Option<AnsiAttachmentData>,
 }
 
 impl AnsiAttachment {
-    pub fn message(&self) -> &Arc<AnsiMessage> {
+    pub fn message(&self) -> &Rc<AnsiMessage> {
         &self.message
     }
 
     pub fn read(
-        message: Arc<AnsiMessage>,
+        message: Rc<AnsiMessage>,
         sub_node: NodeId,
         prop_ids: Option<&[u16]>,
-    ) -> io::Result<Arc<Self>> {
+    ) -> io::Result<Rc<Self>> {
         let node_id_type = sub_node.id_type()?;
         match node_id_type {
             NodeIdType::Attachment => {}
@@ -421,7 +421,7 @@ impl AnsiAttachment {
             (properties, data)
         };
 
-        Ok(Arc::new(Self {
+        Ok(Rc::new(Self {
             message,
             properties,
             data,

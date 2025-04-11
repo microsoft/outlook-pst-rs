@@ -11,7 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListState, Paragraph, StatefulWidget, Widget},
     DefaultTerminal, Frame,
 };
-use std::{cell::OnceCell, io, sync::Arc};
+use std::{cell::OnceCell, io, rc::Rc};
 
 use outlook_pst::{
     ltp::{
@@ -34,9 +34,9 @@ mod encoding;
 struct IpmSubTree {
     display_name: OnceCell<anyhow::Result<String>>,
     root_folders: OnceCell<anyhow::Result<Vec<Folder>>>,
-    pst_file: Arc<AnsiPstFile>,
-    pst_store: OnceCell<anyhow::Result<Arc<AnsiStore>>>,
-    pst_folders: OnceCell<anyhow::Result<Vec<Arc<AnsiFolder>>>>,
+    pst_file: Rc<AnsiPstFile>,
+    pst_store: OnceCell<anyhow::Result<Rc<AnsiStore>>>,
+    pst_folders: OnceCell<anyhow::Result<Vec<Rc<AnsiFolder>>>>,
 }
 
 impl IpmSubTree {
@@ -44,7 +44,7 @@ impl IpmSubTree {
         Self {
             display_name: Default::default(),
             root_folders: Default::default(),
-            pst_file: Arc::new(pst),
+            pst_file: Rc::new(pst),
             pst_store: Default::default(),
             pst_folders: Default::default(),
         }
@@ -60,7 +60,7 @@ impl IpmSubTree {
             .to_string()
     }
 
-    fn store(&self) -> anyhow::Result<Arc<AnsiStore>> {
+    fn store(&self) -> anyhow::Result<Rc<AnsiStore>> {
         self.pst_store
             .get_or_init(|| Ok(AnsiStore::read(self.pst_file.clone())?))
             .as_ref()
@@ -110,12 +110,12 @@ struct Folder {
     name: String,
     sub_folders: OnceCell<anyhow::Result<Vec<Folder>>>,
     messages: OnceCell<anyhow::Result<Vec<Message>>>,
-    pst_folder: Arc<AnsiFolder>,
-    pst_sub_folders: OnceCell<anyhow::Result<Vec<Arc<AnsiFolder>>>>,
+    pst_folder: Rc<AnsiFolder>,
+    pst_sub_folders: OnceCell<anyhow::Result<Vec<Rc<AnsiFolder>>>>,
 }
 
 impl Folder {
-    fn new(folder: Arc<AnsiFolder>) -> anyhow::Result<Self> {
+    fn new(folder: Rc<AnsiFolder>) -> anyhow::Result<Self> {
         let properties = folder.properties();
         let name = properties.display_name()?.to_string();
 
@@ -186,7 +186,7 @@ impl Folder {
 }
 
 enum MessageOrRow {
-    Message(Arc<AnsiMessage>),
+    Message(Rc<AnsiMessage>),
     Row {
         subject: Option<String>,
         received_time: i64,
@@ -199,15 +199,15 @@ struct Message {
     recipients: OnceCell<Vec<Recipient>>,
     body: OnceCell<anyhow::Result<Option<Body>>>,
     attachments: OnceCell<anyhow::Result<Vec<Attachment>>>,
-    pst_store: Arc<AnsiStore>,
-    pst_message: OnceCell<anyhow::Result<Arc<AnsiMessage>>>,
-    pst_full_message: OnceCell<anyhow::Result<Arc<AnsiMessage>>>,
-    pst_attachments: OnceCell<anyhow::Result<Vec<Arc<AnsiAttachment>>>>,
+    pst_store: Rc<AnsiStore>,
+    pst_message: OnceCell<anyhow::Result<Rc<AnsiMessage>>>,
+    pst_full_message: OnceCell<anyhow::Result<Rc<AnsiMessage>>>,
+    pst_attachments: OnceCell<anyhow::Result<Vec<Rc<AnsiAttachment>>>>,
 }
 
 impl Message {
     fn new(
-        store: Arc<AnsiStore>,
+        store: Rc<AnsiStore>,
         table: &AnsiTableContext,
         row: &TableRowData,
     ) -> anyhow::Result<Self> {
@@ -296,7 +296,7 @@ impl Message {
         })
     }
 
-    fn message(&self) -> anyhow::Result<Arc<AnsiMessage>> {
+    fn message(&self) -> anyhow::Result<Rc<AnsiMessage>> {
         match &self.message {
             MessageOrRow::Message(message) => Ok(message.clone()),
             MessageOrRow::Row { .. } => self
@@ -314,7 +314,7 @@ impl Message {
         }
     }
 
-    fn full_message(&self) -> anyhow::Result<Arc<AnsiMessage>> {
+    fn full_message(&self) -> anyhow::Result<Rc<AnsiMessage>> {
         self.pst_full_message
             .get_or_init(|| {
                 Ok(AnsiMessage::read(

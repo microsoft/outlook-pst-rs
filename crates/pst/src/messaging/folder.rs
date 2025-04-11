@@ -1,6 +1,6 @@
 //! ## [Folders](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/dee5b9d0-5513-4c5e-94aa-8bd28a9350b2)
 
-use std::{collections::BTreeMap, io, sync::Arc};
+use std::{collections::BTreeMap, io, rc::Rc};
 
 use super::{store::*, *};
 use crate::{
@@ -96,7 +96,7 @@ impl FolderProperties {
 }
 
 pub struct UnicodeFolder {
-    store: Arc<UnicodeStore>,
+    store: Rc<UnicodeStore>,
     properties: FolderProperties,
     hierarchy_table: Option<UnicodeTableContext>,
     contents_table: Option<UnicodeTableContext>,
@@ -104,11 +104,11 @@ pub struct UnicodeFolder {
 }
 
 impl UnicodeFolder {
-    pub fn store(&self) -> &Arc<UnicodeStore> {
+    pub fn store(&self) -> &Rc<UnicodeStore> {
         &self.store
     }
 
-    pub fn read(store: Arc<UnicodeStore>, entry_id: &EntryId) -> io::Result<Arc<Self>> {
+    pub fn read(store: Rc<UnicodeStore>, entry_id: &EntryId) -> io::Result<Rc<Self>> {
         let node_id = entry_id.node_id();
         let node_id_type = node_id.id_type()?;
         match node_id_type {
@@ -202,7 +202,7 @@ impl UnicodeFolder {
             )
         };
 
-        Ok(Arc::new(Self {
+        Ok(Rc::new(Self {
             store,
             properties,
             hierarchy_table,
@@ -229,7 +229,7 @@ impl UnicodeFolder {
 }
 
 pub struct AnsiFolder {
-    store: Arc<AnsiStore>,
+    store: Rc<AnsiStore>,
     properties: FolderProperties,
     hierarchy_table: Option<AnsiTableContext>,
     contents_table: Option<AnsiTableContext>,
@@ -237,11 +237,11 @@ pub struct AnsiFolder {
 }
 
 impl AnsiFolder {
-    pub fn store(&self) -> &Arc<AnsiStore> {
+    pub fn store(&self) -> &Rc<AnsiStore> {
         &self.store
     }
 
-    pub fn read(store: Arc<AnsiStore>, entry_id: &EntryId) -> io::Result<Arc<Self>> {
+    pub fn read(store: Rc<AnsiStore>, entry_id: &EntryId) -> io::Result<Rc<Self>> {
         let node_id = entry_id.node_id();
         let node_id_type = node_id.id_type()?;
         match node_id_type {
@@ -319,7 +319,7 @@ impl AnsiFolder {
             )
         };
 
-        Ok(Arc::new(Self {
+        Ok(Rc::new(Self {
             store,
             properties,
             hierarchy_table,

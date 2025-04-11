@@ -5,7 +5,7 @@ use std::{
     collections::BTreeMap,
     fmt::Display,
     io::{self, Cursor, Read, Seek, SeekFrom, Write},
-    sync::Arc,
+    rc::Rc,
 };
 
 use super::{read_write::*, store::*, *};
@@ -457,16 +457,16 @@ impl NamedPropertyMapProperties {
 }
 
 pub struct UnicodeNamedPropertyMap {
-    store: Arc<UnicodeStore>,
+    store: Rc<UnicodeStore>,
     properties: NamedPropertyMapProperties,
 }
 
 impl UnicodeNamedPropertyMap {
-    pub fn store(&self) -> &Arc<UnicodeStore> {
+    pub fn store(&self) -> &Rc<UnicodeStore> {
         &self.store
     }
 
-    pub fn read(store: Arc<UnicodeStore>) -> io::Result<Arc<Self>> {
+    pub fn read(store: Rc<UnicodeStore>) -> io::Result<Rc<Self>> {
         let pst = store.pst();
         let header = pst.header();
         let root = header.root();
@@ -502,7 +502,7 @@ impl UnicodeNamedPropertyMap {
             NamedPropertyMapProperties { properties }
         };
 
-        Ok(Arc::new(Self { store, properties }))
+        Ok(Rc::new(Self { store, properties }))
     }
 
     pub fn properties(&self) -> &NamedPropertyMapProperties {
@@ -511,16 +511,16 @@ impl UnicodeNamedPropertyMap {
 }
 
 pub struct AnsiNamedPropertyMap {
-    store: Arc<AnsiStore>,
+    store: Rc<AnsiStore>,
     properties: NamedPropertyMapProperties,
 }
 
 impl AnsiNamedPropertyMap {
-    pub fn store(&self) -> &Arc<AnsiStore> {
+    pub fn store(&self) -> &Rc<AnsiStore> {
         &self.store
     }
 
-    pub fn read(store: Arc<AnsiStore>) -> io::Result<Arc<Self>> {
+    pub fn read(store: Rc<AnsiStore>) -> io::Result<Rc<Self>> {
         let pst = store.pst();
         let header = pst.header();
         let root = header.root();
@@ -556,7 +556,7 @@ impl AnsiNamedPropertyMap {
             NamedPropertyMapProperties { properties }
         };
 
-        Ok(Arc::new(Self { store, properties }))
+        Ok(Rc::new(Self { store, properties }))
     }
 
     pub fn properties(&self) -> &NamedPropertyMapProperties {
