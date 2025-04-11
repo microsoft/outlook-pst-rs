@@ -26,10 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - different padding in AnsiMapPage types
 - count bits within bytes
 
-### Other
-- revert version bump to run release-plz
-- update docs and version for v1 release
-
 ## [0.1.2](https://github.com/microsoft/outlook-pst-rs/compare/outlook-pst-v0.1.1...outlook-pst-v0.1.2) - 2025-03-12
 
 ### Fixed
