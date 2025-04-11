@@ -24,6 +24,8 @@ use ndb::{
 
 #[derive(Error, Debug)]
 pub enum PstError {
+    #[error("Opened read-only")]
+    OpenedReadOnly,
     #[error("Cannot write to file: {0}")]
     NoWriteAccess(String),
     #[error("I/O error: {0:?}")]
@@ -107,6 +109,10 @@ where
     }
 }
 
+pub trait PstReader: Read + Seek {}
+
+impl<T> PstReader for T where T: Read + Seek {}
+
 /// [PST File](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/6b57253b-0853-47bb-99bb-d4b8f78105f0)
 pub trait PstFile: Sized {
     type BlockId: BlockId + BlockIdReadWrite;
@@ -130,35 +136,41 @@ pub trait PstFile: Sized {
 
     fn header(&self) -> &Self::Header;
     fn density_list(&self) -> Result<&dyn DensityListPage<Self>, &io::Error>;
-    fn reader(&self) -> &Mutex<BufReader<File>>;
+    fn reader(&self) -> &Mutex<Box<dyn PstReader>>;
     fn lock(&mut self) -> io::Result<PstFileLockGuard<Self>>;
 }
 
 pub struct UnicodePstFile {
-    reader: Mutex<BufReader<File>>,
+    reader: Mutex<Box<dyn PstReader>>,
     writer: PstResult<Mutex<BufWriter<File>>>,
     header: UnicodeHeader,
     density_list: io::Result<UnicodeDensityListPage>,
 }
 
 impl UnicodePstFile {
+    pub fn read_from(reader: Box<dyn PstReader>) -> io::Result<Self> {
+        let mut reader = BufReader::new(reader);
+        let header = UnicodeHeader::read(&mut reader)?;
+        let density_list = UnicodeDensityListPage::read(&mut reader);
+        Ok(Self {
+            reader: Mutex::new(Box::new(reader)),
+            writer: Err(PstError::OpenedReadOnly),
+            header,
+            density_list,
+        })
+    }
+
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
+        let reader = Box::new(File::open(&path)?);
         let writer = OpenOptions::new()
             .write(true)
             .open(&path)
             .map(BufWriter::new)
             .map(Mutex::new)
             .map_err(|_| PstError::NoWriteAccess(path.as_ref().display().to_string()));
-        let mut reader = BufReader::new(File::open(path)?);
-        reader.seek(SeekFrom::Start(0))?;
-        let header = UnicodeHeader::read(&mut reader)?;
-        let density_list = UnicodeDensityListPage::read(&mut reader);
-
         Ok(Self {
-            reader: Mutex::new(reader),
             writer,
-            header,
-            density_list,
+            ..Self::read_from(reader)?
         })
     }
 }
@@ -205,7 +217,7 @@ impl PstFile for UnicodePstFile {
         self.density_list.as_ref().map(|dl| dl as _)
     }
 
-    fn reader(&self) -> &Mutex<BufReader<File>> {
+    fn reader(&self) -> &Mutex<Box<dyn PstReader>> {
         &self.reader
     }
 
@@ -215,28 +227,36 @@ impl PstFile for UnicodePstFile {
 }
 
 pub struct AnsiPstFile {
-    reader: Mutex<BufReader<File>>,
+    reader: Mutex<Box<dyn PstReader>>,
     writer: PstResult<Mutex<BufWriter<File>>>,
     header: ndb::header::AnsiHeader,
     density_list: io::Result<ndb::page::AnsiDensityListPage>,
 }
 
 impl AnsiPstFile {
+    pub fn read_from(reader: Box<dyn PstReader>) -> io::Result<Self> {
+        let mut reader = BufReader::new(reader);
+        let header = AnsiHeader::read(&mut reader)?;
+        let density_list = AnsiDensityListPage::read(&mut reader);
+        Ok(Self {
+            reader: Mutex::new(Box::new(reader)),
+            writer: Err(PstError::OpenedReadOnly),
+            header,
+            density_list,
+        })
+    }
+
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
+        let reader = Box::new(File::open(&path)?);
         let writer = OpenOptions::new()
             .write(true)
             .open(&path)
             .map(BufWriter::new)
             .map(Mutex::new)
             .map_err(|_| PstError::NoWriteAccess(path.as_ref().display().to_string()));
-        let mut reader = BufReader::new(File::open(path)?);
-        let header = AnsiHeader::read(&mut reader)?;
-        let density_list = AnsiDensityListPage::read(&mut reader);
         Ok(Self {
-            reader: Mutex::new(reader),
             writer,
-            header,
-            density_list,
+            ..Self::read_from(reader)?
         })
     }
 }
@@ -283,7 +303,7 @@ impl PstFile for AnsiPstFile {
         self.density_list.as_ref().map(|dl| dl as _)
     }
 
-    fn reader(&self) -> &Mutex<BufReader<File>> {
+    fn reader(&self) -> &Mutex<Box<dyn PstReader>> {
         &self.reader
     }
 
