@@ -112,6 +112,8 @@ where
 {
     fn version(&self) -> NdbVersion;
     fn crypt_method(&self) -> NdbCryptMethod;
+    fn next_block(&self) -> <Pst as PstFile>::BlockId;
+    fn next_page(&self) -> <Pst as PstFile>::BlockId;
     fn root(&self) -> &<Pst as PstFile>::Root;
     fn root_mut(&mut self) -> &mut <Pst as PstFile>::Root;
 }
@@ -161,6 +163,14 @@ impl Header<UnicodePstFile> for UnicodeHeader {
 
     fn crypt_method(&self) -> NdbCryptMethod {
         self.crypt_method
+    }
+
+    fn next_block(&self) -> <UnicodePstFile as PstFile>::BlockId {
+        self.next_block
+    }
+
+    fn next_page(&self) -> <UnicodePstFile as PstFile>::BlockId {
+        self.next_page
     }
 
     fn root(&self) -> &<UnicodePstFile as PstFile>::Root {
@@ -426,6 +436,14 @@ impl Header<AnsiPstFile> for AnsiHeader {
 
     fn crypt_method(&self) -> NdbCryptMethod {
         self.crypt_method
+    }
+
+    fn next_block(&self) -> <AnsiPstFile as PstFile>::BlockId {
+        self.next_block
+    }
+
+    fn next_page(&self) -> <AnsiPstFile as PstFile>::BlockId {
+        self.next_page
     }
 
     fn root(&self) -> &<AnsiPstFile as PstFile>::Root {
