@@ -11,7 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListState, Paragraph, StatefulWidget, Widget},
     DefaultTerminal, Frame,
 };
-use std::{cell::OnceCell, io};
+use std::{cell::OnceCell, io, sync::Arc};
 
 use outlook_pst::{
     ltp::{
@@ -31,29 +31,26 @@ use outlook_pst::{
 mod args;
 mod encoding;
 
-struct IpmSubTree<'store, 'tree> {
+struct IpmSubTree {
     display_name: OnceCell<anyhow::Result<String>>,
-    root_folders: OnceCell<anyhow::Result<Vec<Folder<'store, 'tree>>>>,
-    pst_file: AnsiPstFile,
-    pst_store: OnceCell<anyhow::Result<AnsiStore<'store>>>,
-    pst_folders: OnceCell<anyhow::Result<Vec<AnsiFolder<'store>>>>,
+    root_folders: OnceCell<anyhow::Result<Vec<Folder>>>,
+    pst_file: Arc<AnsiPstFile>,
+    pst_store: OnceCell<anyhow::Result<Arc<AnsiStore>>>,
+    pst_folders: OnceCell<anyhow::Result<Vec<Arc<AnsiFolder>>>>,
 }
 
-impl<'store, 'tree> IpmSubTree<'store, 'tree>
-where
-    'tree: 'store,
-{
+impl IpmSubTree {
     fn new(pst: AnsiPstFile) -> Self {
         Self {
             display_name: Default::default(),
             root_folders: Default::default(),
-            pst_file: pst,
+            pst_file: Arc::new(pst),
             pst_store: Default::default(),
             pst_folders: Default::default(),
         }
     }
 
-    fn display_name(&'tree self) -> String {
+    fn display_name(&self) -> String {
         self.display_name
             .get_or_init(|| Ok(self.store()?.properties().display_name()?))
             .as_ref()
@@ -63,14 +60,15 @@ where
             .to_string()
     }
 
-    fn store(&'tree self) -> anyhow::Result<&'store AnsiStore<'store>> {
+    fn store(&self) -> anyhow::Result<Arc<AnsiStore>> {
         self.pst_store
-            .get_or_init(|| Ok(AnsiStore::read(&self.pst_file)?))
+            .get_or_init(|| Ok(AnsiStore::read(self.pst_file.clone())?))
             .as_ref()
+            .map(Clone::clone)
             .map_err(|err| anyhow::anyhow!("{err:?}"))
     }
 
-    fn root_folders(&'tree self) -> anyhow::Result<&'tree [Folder<'store, 'tree>]> {
+    fn root_folders(&self) -> anyhow::Result<&[Folder]> {
         Ok(self
             .root_folders
             .get_or_init(|| {
@@ -95,6 +93,7 @@ where
                     .as_ref()
                     .map_err(|err| anyhow::anyhow!("{err:?}"))?
                     .iter()
+                    .cloned()
                     .map(Folder::new)
                     .collect::<Result<Vec<_>, _>>()?;
                 root_folders.sort_by(|a, b| a.name.cmp(&b.name));
@@ -107,19 +106,16 @@ where
     }
 }
 
-struct Folder<'store, 'folder> {
+struct Folder {
     name: String,
-    sub_folders: OnceCell<anyhow::Result<Vec<Folder<'store, 'folder>>>>,
-    messages: OnceCell<anyhow::Result<Vec<Message<'store, 'folder>>>>,
-    pst_folder: &'store AnsiFolder<'store>,
-    pst_sub_folders: OnceCell<anyhow::Result<Vec<AnsiFolder<'store>>>>,
+    sub_folders: OnceCell<anyhow::Result<Vec<Folder>>>,
+    messages: OnceCell<anyhow::Result<Vec<Message>>>,
+    pst_folder: Arc<AnsiFolder>,
+    pst_sub_folders: OnceCell<anyhow::Result<Vec<Arc<AnsiFolder>>>>,
 }
 
-impl<'store, 'folder> Folder<'store, 'folder>
-where
-    'folder: 'store,
-{
-    fn new(folder: &'store AnsiFolder<'store>) -> anyhow::Result<Self> {
+impl Folder {
+    fn new(folder: Arc<AnsiFolder>) -> anyhow::Result<Self> {
         let properties = folder.properties();
         let name = properties.display_name()?.to_string();
 
@@ -132,7 +128,7 @@ where
         })
     }
 
-    fn sub_folders(&'folder self) -> anyhow::Result<&'folder [Folder<'store, 'folder>]> {
+    fn sub_folders(&self) -> anyhow::Result<&[Folder]> {
         Ok(self
             .sub_folders
             .get_or_init(|| {
@@ -149,13 +145,17 @@ where
                                     let node = NodeId::from(u32::from(row.id()));
                                     let entry_id =
                                         self.pst_folder.store().properties().make_entry_id(node)?;
-                                    Ok(AnsiFolder::read(self.pst_folder.store(), &entry_id)?)
+                                    Ok(AnsiFolder::read(
+                                        self.pst_folder.store().clone(),
+                                        &entry_id,
+                                    )?)
                                 })
                                 .collect()
                         })
                         .as_ref()
                         .map_err(|err| anyhow::anyhow!("{err:?}"))?
                         .iter()
+                        .cloned()
                         .map(Folder::new)
                         .collect::<Result<Vec<_>, _>>()?;
                 sub_folders.sort_by(|a, b| a.name.cmp(&b.name));
@@ -167,7 +167,7 @@ where
             .as_slice())
     }
 
-    fn messages(&'folder self) -> anyhow::Result<&'folder [Message<'store, 'folder>]> {
+    fn messages(&self) -> anyhow::Result<&[Message]> {
         self.messages
             .get_or_init(|| {
                 let contents_table = self
@@ -176,7 +176,7 @@ where
                     .ok_or(anyhow::anyhow!("No contents table found for the folder."))?;
                 contents_table
                     .rows_matrix()
-                    .map(|row| Message::new(self.pst_folder.store(), contents_table, row))
+                    .map(|row| Message::new(self.pst_folder.store().clone(), contents_table, row))
                     .collect::<anyhow::Result<Vec<_>>>()
             })
             .as_ref()
@@ -185,35 +185,32 @@ where
     }
 }
 
-enum MessageOrRow<'store> {
-    Message(AnsiMessage<'store>),
+enum MessageOrRow {
+    Message(Arc<AnsiMessage>),
     Row {
         subject: Option<String>,
         received_time: i64,
     },
 }
 
-struct Message<'store, 'message> {
+struct Message {
     entry_id: EntryId,
-    message: MessageOrRow<'store>,
+    message: MessageOrRow,
     recipients: OnceCell<Vec<Recipient>>,
     body: OnceCell<anyhow::Result<Option<Body>>>,
-    attachments: OnceCell<anyhow::Result<Vec<Attachment<'store, 'message>>>>,
-    pst_store: &'store AnsiStore<'store>,
-    pst_message: OnceCell<anyhow::Result<AnsiMessage<'store>>>,
-    pst_full_message: OnceCell<anyhow::Result<AnsiMessage<'store>>>,
-    pst_attachments: OnceCell<anyhow::Result<Vec<AnsiAttachment<'store>>>>,
+    attachments: OnceCell<anyhow::Result<Vec<Attachment>>>,
+    pst_store: Arc<AnsiStore>,
+    pst_message: OnceCell<anyhow::Result<Arc<AnsiMessage>>>,
+    pst_full_message: OnceCell<anyhow::Result<Arc<AnsiMessage>>>,
+    pst_attachments: OnceCell<anyhow::Result<Vec<Arc<AnsiAttachment>>>>,
 }
 
-impl<'store, 'message> Message<'store, 'message>
-where
-    'message: 'store,
-{
-    fn new<'a>(
-        store: &'store AnsiStore<'store>,
-        table: &'a AnsiTableContext,
-        row: &'a TableRowData,
-    ) -> anyhow::Result<Message<'store, 'message>> {
+impl Message {
+    fn new(
+        store: Arc<AnsiStore>,
+        table: &AnsiTableContext,
+        row: &TableRowData,
+    ) -> anyhow::Result<Self> {
         let entry_id = store
             .properties()
             .make_entry_id(NodeId::from(u32::from(row.id())))?;
@@ -279,7 +276,7 @@ where
             }
             _ => {
                 let message = MessageOrRow::Message(AnsiMessage::read(
-                    store,
+                    store.clone(),
                     &entry_id,
                     Some(&[0x0037, 0x0E06]),
                 )?);
@@ -299,27 +296,35 @@ where
         })
     }
 
-    fn message(&'message self) -> anyhow::Result<&'store AnsiMessage<'store>> {
+    fn message(&self) -> anyhow::Result<Arc<AnsiMessage>> {
         match &self.message {
-            MessageOrRow::Message(message) => Ok(message),
+            MessageOrRow::Message(message) => Ok(message.clone()),
             MessageOrRow::Row { .. } => self
                 .pst_message
                 .get_or_init(|| {
                     Ok(AnsiMessage::read(
-                        self.pst_store,
+                        self.pst_store.clone(),
                         &self.entry_id,
                         Some(&[0x0037, 0x0E06]),
                     )?)
                 })
                 .as_ref()
+                .map(Clone::clone)
                 .map_err(|err| anyhow::anyhow!("{err:?}")),
         }
     }
 
-    fn full_message(&'message self) -> anyhow::Result<&'store AnsiMessage<'store>> {
+    fn full_message(&self) -> anyhow::Result<Arc<AnsiMessage>> {
         self.pst_full_message
-            .get_or_init(|| Ok(AnsiMessage::read(self.pst_store, &self.entry_id, None)?))
+            .get_or_init(|| {
+                Ok(AnsiMessage::read(
+                    self.pst_store.clone(),
+                    &self.entry_id,
+                    None,
+                )?)
+            })
             .as_ref()
+            .map(Clone::clone)
             .map_err(|err| anyhow::anyhow!("{err:?}"))
     }
 
@@ -346,7 +351,7 @@ where
         }
     }
 
-    fn recipients(&'message self) -> anyhow::Result<&'store [Recipient]> {
+    fn recipients(&self) -> anyhow::Result<&[Recipient]> {
         Ok(self
             .recipients
             .get_or_init(|| {
@@ -430,13 +435,13 @@ enum Recipient {
     Bcc(String),
 }
 
-enum Attachment<'store, 'message> {
+enum Attachment {
     File(Vec<u8>),
-    Message(Message<'store, 'message>),
+    Message(Message),
 }
 
-struct App<'store, 'app> {
-    ipm_sub_tree: IpmSubTree<'store, 'app>,
+struct App {
+    ipm_sub_tree: IpmSubTree,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -514,15 +519,12 @@ impl AppState {
     }
 }
 
-impl<'store, 'app> App<'store, 'app>
-where
-    'app: 'store,
-{
-    fn new(ipm_sub_tree: IpmSubTree<'store, 'app>) -> Self {
+impl App {
+    fn new(ipm_sub_tree: IpmSubTree) -> Self {
         Self { ipm_sub_tree }
     }
 
-    fn run(&'app mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+    fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         let mut state = AppState::default();
         while !state.exit {
             terminal.draw(|frame| self.draw(frame, &mut state))?;
@@ -532,15 +534,12 @@ where
         Ok(())
     }
 
-    fn draw(&'app self, frame: &mut Frame, state: &mut AppState) {
+    fn draw(&self, frame: &mut Frame, state: &mut AppState) {
         frame.render_stateful_widget(self, frame.area(), state);
     }
 }
 
-impl<'store, 'app> StatefulWidget for &'app App<'store, 'app>
-where
-    'app: 'store,
-{
+impl StatefulWidget for &App {
     type State = AppState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut AppState) {

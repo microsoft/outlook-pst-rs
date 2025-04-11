@@ -1,6 +1,6 @@
 //! ## [Attachment Objects](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/46eb4828-c6a5-420d-a137-9ee36df317c1)
 
-use std::{collections::BTreeMap, io};
+use std::{collections::BTreeMap, io, sync::Arc};
 
 use super::{message::*, *};
 use crate::{
@@ -127,28 +127,28 @@ impl TryFrom<i32> for AttachmentMethod {
     }
 }
 
-pub enum UnicodeAttachmentData<'a> {
+pub enum UnicodeAttachmentData {
     Binary(BinaryValue),
-    Message(UnicodeMessage<'a>),
+    Message(Arc<UnicodeMessage>),
     Storage(UnicodeBlockBTreeEntry),
 }
 
-pub struct UnicodeAttachment<'a> {
-    message: &'a UnicodeMessage<'a>,
+pub struct UnicodeAttachment {
+    message: Arc<UnicodeMessage>,
     properties: AttachmentProperties,
-    data: Option<UnicodeAttachmentData<'a>>,
+    data: Option<UnicodeAttachmentData>,
 }
 
-impl<'a> UnicodeAttachment<'a> {
-    pub fn message(&self) -> &UnicodeMessage {
-        self.message
+impl UnicodeAttachment {
+    pub fn message(&self) -> &Arc<UnicodeMessage> {
+        &self.message
     }
 
     pub fn read(
-        message: &'a UnicodeMessage,
+        message: Arc<UnicodeMessage>,
         sub_node: NodeId,
         prop_ids: Option<&[u16]>,
-    ) -> io::Result<Self> {
+    ) -> io::Result<Arc<Self>> {
         let node_id_type = sub_node.id_type()?;
         match node_id_type {
             NodeIdType::Attachment => {}
@@ -238,7 +238,7 @@ impl<'a> UnicodeAttachment<'a> {
                         node.sub_node(),
                         None,
                     );
-                    let message = UnicodeMessage::read_embedded(store, node, prop_ids)?;
+                    let message = UnicodeMessage::read_embedded(store.clone(), node, prop_ids)?;
                     Some(UnicodeAttachmentData::Message(message))
                 }
                 AttachmentMethod::Storage => {
@@ -268,11 +268,11 @@ impl<'a> UnicodeAttachment<'a> {
             (properties, data)
         };
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             message,
             properties,
             data,
-        })
+        }))
     }
 
     pub fn properties(&self) -> &AttachmentProperties {
@@ -284,28 +284,28 @@ impl<'a> UnicodeAttachment<'a> {
     }
 }
 
-pub enum AnsiAttachmentData<'a> {
+pub enum AnsiAttachmentData {
     Binary(BinaryValue),
-    Message(AnsiMessage<'a>),
+    Message(Arc<AnsiMessage>),
     Storage(AnsiBlockBTreeEntry),
 }
 
-pub struct AnsiAttachment<'a> {
-    message: &'a AnsiMessage<'a>,
+pub struct AnsiAttachment {
+    message: Arc<AnsiMessage>,
     properties: AttachmentProperties,
-    data: Option<AnsiAttachmentData<'a>>,
+    data: Option<AnsiAttachmentData>,
 }
 
-impl<'a> AnsiAttachment<'a> {
-    pub fn message(&self) -> &AnsiMessage {
-        self.message
+impl AnsiAttachment {
+    pub fn message(&self) -> &Arc<AnsiMessage> {
+        &self.message
     }
 
     pub fn read(
-        message: &'a AnsiMessage,
+        message: Arc<AnsiMessage>,
         sub_node: NodeId,
         prop_ids: Option<&[u16]>,
-    ) -> io::Result<Self> {
+    ) -> io::Result<Arc<Self>> {
         let node_id_type = sub_node.id_type()?;
         match node_id_type {
             NodeIdType::Attachment => {}
@@ -391,7 +391,7 @@ impl<'a> AnsiAttachment<'a> {
                         .ok_or(MessagingError::AttachmentSubNodeNotFound(sub_node))?;
                     let node =
                         AnsiNodeBTreeEntry::new(node.node(), node.block(), node.sub_node(), None);
-                    let message = AnsiMessage::read_embedded(store, node, prop_ids)?;
+                    let message = AnsiMessage::read_embedded(store.clone(), node, prop_ids)?;
                     Some(AnsiAttachmentData::Message(message))
                 }
                 AttachmentMethod::Storage => {
@@ -421,11 +421,11 @@ impl<'a> AnsiAttachment<'a> {
             (properties, data)
         };
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             message,
             properties,
             data,
-        })
+        }))
     }
 
     pub fn properties(&self) -> &AttachmentProperties {

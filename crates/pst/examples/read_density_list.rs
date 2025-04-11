@@ -7,16 +7,16 @@ mod args;
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
     if let Ok(pst) = UnicodePstFile::open(&args.file) {
-        read_density_list(&pst);
+        read_density_list(pst);
     } else {
         let pst = AnsiPstFile::open(&args.file)?;
-        read_density_list(&pst);
+        read_density_list(pst);
     }
 
     Ok(())
 }
 
-fn read_density_list<Pst>(pst: &Pst)
+fn read_density_list<Pst>(pst: Pst)
 where
     Pst: PstFile,
     <Pst as PstFile>::BlockId: Debug,

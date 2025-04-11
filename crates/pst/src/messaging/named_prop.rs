@@ -5,6 +5,7 @@ use std::{
     collections::BTreeMap,
     fmt::Display,
     io::{self, Cursor, Read, Seek, SeekFrom, Write},
+    sync::Arc,
 };
 
 use super::{read_write::*, store::*, *};
@@ -455,17 +456,17 @@ impl NamedPropertyMapProperties {
     }
 }
 
-pub struct UnicodeNamedPropertyMap<'a> {
-    store: &'a UnicodeStore<'a>,
+pub struct UnicodeNamedPropertyMap {
+    store: Arc<UnicodeStore>,
     properties: NamedPropertyMapProperties,
 }
 
-impl<'a> UnicodeNamedPropertyMap<'a> {
-    pub fn store(&self) -> &UnicodeStore {
-        self.store
+impl UnicodeNamedPropertyMap {
+    pub fn store(&self) -> &Arc<UnicodeStore> {
+        &self.store
     }
 
-    pub fn read(store: &'a UnicodeStore) -> io::Result<Self> {
+    pub fn read(store: Arc<UnicodeStore>) -> io::Result<Arc<Self>> {
         let pst = store.pst();
         let header = pst.header();
         let root = header.root();
@@ -501,7 +502,7 @@ impl<'a> UnicodeNamedPropertyMap<'a> {
             NamedPropertyMapProperties { properties }
         };
 
-        Ok(Self { store, properties })
+        Ok(Arc::new(Self { store, properties }))
     }
 
     pub fn properties(&self) -> &NamedPropertyMapProperties {
@@ -509,17 +510,17 @@ impl<'a> UnicodeNamedPropertyMap<'a> {
     }
 }
 
-pub struct AnsiNamedPropertyMap<'a> {
-    store: &'a AnsiStore<'a>,
+pub struct AnsiNamedPropertyMap {
+    store: Arc<AnsiStore>,
     properties: NamedPropertyMapProperties,
 }
 
-impl<'a> AnsiNamedPropertyMap<'a> {
-    pub fn store(&self) -> &AnsiStore {
-        self.store
+impl AnsiNamedPropertyMap {
+    pub fn store(&self) -> &Arc<AnsiStore> {
+        &self.store
     }
 
-    pub fn read(store: &'a AnsiStore) -> io::Result<Self> {
+    pub fn read(store: Arc<AnsiStore>) -> io::Result<Arc<Self>> {
         let pst = store.pst();
         let header = pst.header();
         let root = header.root();
@@ -555,7 +556,7 @@ impl<'a> AnsiNamedPropertyMap<'a> {
             NamedPropertyMapProperties { properties }
         };
 
-        Ok(Self { store, properties })
+        Ok(Arc::new(Self { store, properties }))
     }
 
     pub fn properties(&self) -> &NamedPropertyMapProperties {

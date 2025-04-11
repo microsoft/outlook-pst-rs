@@ -5,6 +5,7 @@ use std::{
     collections::BTreeMap,
     fmt::Debug,
     io::{self, Read, Write},
+    sync::Arc,
 };
 
 use super::{read_write::*, *};
@@ -235,16 +236,16 @@ impl StoreProperties {
     }
 }
 
-pub struct UnicodeStore<'a> {
-    pst: &'a UnicodePstFile,
+pub struct UnicodeStore {
+    pst: Arc<UnicodePstFile>,
     node_btree: UnicodeNodeBTree,
     block_btree: UnicodeBlockBTree,
     properties: StoreProperties,
 }
 
-impl<'a> UnicodeStore<'a> {
-    pub fn pst(&self) -> &UnicodePstFile {
-        self.pst
+impl UnicodeStore {
+    pub fn pst(&self) -> &Arc<UnicodePstFile> {
+        &self.pst
     }
 
     pub fn node_btree(&self) -> &UnicodeNodeBTree {
@@ -255,7 +256,7 @@ impl<'a> UnicodeStore<'a> {
         &self.block_btree
     }
 
-    pub fn read(pst: &'a UnicodePstFile) -> io::Result<Self> {
+    pub fn read(pst: Arc<UnicodePstFile>) -> io::Result<Arc<Self>> {
         let header = pst.header();
         let root = header.root();
 
@@ -292,12 +293,12 @@ impl<'a> UnicodeStore<'a> {
             (node_btree, block_btree, properties)
         };
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             pst,
             node_btree,
             block_btree,
             properties,
-        })
+        }))
     }
 
     pub fn properties(&self) -> &StoreProperties {
@@ -347,16 +348,16 @@ impl<'a> UnicodeStore<'a> {
     }
 }
 
-pub struct AnsiStore<'a> {
-    pst: &'a AnsiPstFile,
+pub struct AnsiStore {
+    pst: Arc<AnsiPstFile>,
     node_btree: AnsiNodeBTree,
     block_btree: AnsiBlockBTree,
     properties: StoreProperties,
 }
 
-impl<'a> AnsiStore<'a> {
-    pub fn pst(&self) -> &AnsiPstFile {
-        self.pst
+impl AnsiStore {
+    pub fn pst(&self) -> &Arc<AnsiPstFile> {
+        &self.pst
     }
 
     pub fn node_btree(&self) -> &AnsiNodeBTree {
@@ -367,7 +368,7 @@ impl<'a> AnsiStore<'a> {
         &self.block_btree
     }
 
-    pub fn read(pst: &'a AnsiPstFile) -> io::Result<Self> {
+    pub fn read(pst: Arc<AnsiPstFile>) -> io::Result<Arc<Self>> {
         let header = pst.header();
         let root = header.root();
 
@@ -404,12 +405,12 @@ impl<'a> AnsiStore<'a> {
             (node_btree, block_btree, properties)
         };
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             pst,
             node_btree,
             block_btree,
             properties,
-        })
+        }))
     }
 
     pub fn properties(&self) -> &StoreProperties {

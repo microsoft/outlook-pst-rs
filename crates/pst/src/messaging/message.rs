@@ -1,6 +1,6 @@
 //! ## [Message Objects](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/1042af37-aaa4-4edc-bffd-90a1ede24188)
 
-use std::{collections::BTreeMap, io};
+use std::{collections::BTreeMap, io, sync::Arc};
 
 use super::{store::*, *};
 use crate::{
@@ -139,24 +139,24 @@ impl MessageProperties {
 pub type UnicodeMessageSubNodes = BTreeMap<NodeId, UnicodeLeafSubNodeTreeEntry>;
 pub type AnsiMessageSubNodes = BTreeMap<NodeId, AnsiLeafSubNodeTreeEntry>;
 
-pub struct UnicodeMessage<'a> {
-    store: &'a UnicodeStore<'a>,
+pub struct UnicodeMessage {
+    store: Arc<UnicodeStore>,
     properties: MessageProperties,
     sub_nodes: UnicodeMessageSubNodes,
     recipient_table: UnicodeTableContext,
     attachment_table: Option<UnicodeTableContext>,
 }
 
-impl<'a> UnicodeMessage<'a> {
-    pub fn store(&self) -> &UnicodeStore {
-        self.store
+impl UnicodeMessage {
+    pub fn store(&self) -> &Arc<UnicodeStore> {
+        &self.store
     }
 
     pub fn read(
-        store: &'a UnicodeStore,
+        store: Arc<UnicodeStore>,
         entry_id: &EntryId,
         prop_ids: Option<&[u16]>,
-    ) -> io::Result<Self> {
+    ) -> io::Result<Arc<Self>> {
         let node_id = entry_id.node_id();
         let node_id_type = node_id.id_type()?;
         match node_id_type {
@@ -189,10 +189,10 @@ impl<'a> UnicodeMessage<'a> {
     }
 
     pub fn read_embedded(
-        store: &'a UnicodeStore,
+        store: Arc<UnicodeStore>,
         node: UnicodeNodeBTreeEntry,
         prop_ids: Option<&[u16]>,
-    ) -> io::Result<Self> {
+    ) -> io::Result<Arc<Self>> {
         let pst = store.pst();
         let header = pst.header();
         let root = header.root();
@@ -287,13 +287,13 @@ impl<'a> UnicodeMessage<'a> {
             (properties, sub_nodes, recipient_table, attachment_table)
         };
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             store,
             properties,
             sub_nodes,
             recipient_table,
             attachment_table,
-        })
+        }))
     }
 
     pub fn properties(&self) -> &MessageProperties {
@@ -313,24 +313,24 @@ impl<'a> UnicodeMessage<'a> {
     }
 }
 
-pub struct AnsiMessage<'a> {
-    store: &'a AnsiStore<'a>,
+pub struct AnsiMessage {
+    store: Arc<AnsiStore>,
     properties: MessageProperties,
     sub_nodes: AnsiMessageSubNodes,
     recipient_table: AnsiTableContext,
     attachment_table: Option<AnsiTableContext>,
 }
 
-impl<'a> AnsiMessage<'a> {
-    pub fn store(&self) -> &AnsiStore {
-        self.store
+impl AnsiMessage {
+    pub fn store(&self) -> &Arc<AnsiStore> {
+        &self.store
     }
 
     pub fn read(
-        store: &'a AnsiStore,
+        store: Arc<AnsiStore>,
         entry_id: &EntryId,
         prop_ids: Option<&[u16]>,
-    ) -> io::Result<Self> {
+    ) -> io::Result<Arc<Self>> {
         let node_id = entry_id.node_id();
         let node_id_type = node_id.id_type()?;
         match node_id_type {
@@ -363,10 +363,10 @@ impl<'a> AnsiMessage<'a> {
     }
 
     pub fn read_embedded(
-        store: &'a AnsiStore,
+        store: Arc<AnsiStore>,
         node: AnsiNodeBTreeEntry,
         prop_ids: Option<&[u16]>,
-    ) -> io::Result<Self> {
+    ) -> io::Result<Arc<Self>> {
         let pst = store.pst();
         let header = pst.header();
         let root = header.root();
@@ -458,13 +458,13 @@ impl<'a> AnsiMessage<'a> {
             (properties, sub_nodes, recipient_table, attachment_table)
         };
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             store,
             properties,
             sub_nodes,
             recipient_table,
             attachment_table,
-        })
+        }))
     }
 
     pub fn properties(&self) -> &MessageProperties {

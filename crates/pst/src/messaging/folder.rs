@@ -1,6 +1,6 @@
 //! ## [Folders](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/dee5b9d0-5513-4c5e-94aa-8bd28a9350b2)
 
-use std::{collections::BTreeMap, io};
+use std::{collections::BTreeMap, io, sync::Arc};
 
 use super::{store::*, *};
 use crate::{
@@ -95,20 +95,20 @@ impl FolderProperties {
     }
 }
 
-pub struct UnicodeFolder<'a> {
-    store: &'a UnicodeStore<'a>,
+pub struct UnicodeFolder {
+    store: Arc<UnicodeStore>,
     properties: FolderProperties,
     hierarchy_table: Option<UnicodeTableContext>,
     contents_table: Option<UnicodeTableContext>,
     associated_table: Option<UnicodeTableContext>,
 }
 
-impl<'a> UnicodeFolder<'a> {
-    pub fn store(&self) -> &UnicodeStore {
-        self.store
+impl UnicodeFolder {
+    pub fn store(&self) -> &Arc<UnicodeStore> {
+        &self.store
     }
 
-    pub fn read(store: &'a UnicodeStore, entry_id: &EntryId) -> io::Result<Self> {
+    pub fn read(store: Arc<UnicodeStore>, entry_id: &EntryId) -> io::Result<Arc<Self>> {
         let node_id = entry_id.node_id();
         let node_id_type = node_id.id_type()?;
         match node_id_type {
@@ -202,13 +202,13 @@ impl<'a> UnicodeFolder<'a> {
             )
         };
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             store,
             properties,
             hierarchy_table,
             contents_table,
             associated_table,
-        })
+        }))
     }
 
     pub fn properties(&self) -> &FolderProperties {
@@ -228,20 +228,20 @@ impl<'a> UnicodeFolder<'a> {
     }
 }
 
-pub struct AnsiFolder<'a> {
-    store: &'a AnsiStore<'a>,
+pub struct AnsiFolder {
+    store: Arc<AnsiStore>,
     properties: FolderProperties,
     hierarchy_table: Option<AnsiTableContext>,
     contents_table: Option<AnsiTableContext>,
     associated_table: Option<AnsiTableContext>,
 }
 
-impl<'a> AnsiFolder<'a> {
-    pub fn store(&self) -> &AnsiStore {
-        self.store
+impl AnsiFolder {
+    pub fn store(&self) -> &Arc<AnsiStore> {
+        &self.store
     }
 
-    pub fn read(store: &'a AnsiStore, entry_id: &EntryId) -> io::Result<Self> {
+    pub fn read(store: Arc<AnsiStore>, entry_id: &EntryId) -> io::Result<Arc<Self>> {
         let node_id = entry_id.node_id();
         let node_id_type = node_id.id_type()?;
         match node_id_type {
@@ -319,13 +319,13 @@ impl<'a> AnsiFolder<'a> {
             )
         };
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             store,
             properties,
             hierarchy_table,
             contents_table,
             associated_table,
-        })
+        }))
     }
 
     pub fn properties(&self) -> &FolderProperties {

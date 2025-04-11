@@ -11,16 +11,16 @@ fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
 
     if let Ok(pst) = UnicodePstFile::open(&args.file) {
-        read_header(&pst);
+        read_header(pst);
     } else {
         let pst = AnsiPstFile::open(&args.file)?;
-        read_header(&pst);
+        read_header(pst);
     }
 
     Ok(())
 }
 
-fn read_header<Pst>(pst: &Pst)
+fn read_header<Pst>(pst: Pst)
 where
     Pst: PstFile,
     <Pst as PstFile>::BlockId: Debug,
