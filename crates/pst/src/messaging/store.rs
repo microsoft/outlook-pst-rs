@@ -5,6 +5,7 @@ use std::{
     collections::BTreeMap,
     fmt::Debug,
     io::{self, Read, Write},
+    rc::Rc,
 };
 
 use super::{read_write::*, *};
@@ -20,14 +21,11 @@ use crate::{
         block::{AnsiDataTree, UnicodeDataTree},
         header::Header,
         node_id::{NodeId, NodeIdType, NID_MESSAGE_STORE, NID_ROOT_FOLDER},
-        page::{
-            AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, RootBTree, UnicodeBlockBTree,
-            UnicodeNodeBTree,
-        },
+        page::*,
         read_write::NodeIdReadWrite,
         root::Root,
     },
-    AnsiPstFile, UnicodePstFile,
+    AnsiPstFile, PstFile, UnicodePstFile,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -238,16 +236,16 @@ impl StoreProperties {
     }
 }
 
-pub struct UnicodeStore<'a> {
-    pst: &'a UnicodePstFile,
+pub struct UnicodeStore {
+    pst: Rc<UnicodePstFile>,
     node_btree: UnicodeNodeBTree,
     block_btree: UnicodeBlockBTree,
     properties: StoreProperties,
 }
 
-impl<'a> UnicodeStore<'a> {
-    pub fn pst(&self) -> &UnicodePstFile {
-        self.pst
+impl UnicodeStore {
+    pub fn pst(&self) -> &Rc<UnicodePstFile> {
+        &self.pst
     }
 
     pub fn node_btree(&self) -> &UnicodeNodeBTree {
@@ -258,13 +256,13 @@ impl<'a> UnicodeStore<'a> {
         &self.block_btree
     }
 
-    pub fn read(pst: &'a UnicodePstFile) -> io::Result<Self> {
+    pub fn read(pst: Rc<UnicodePstFile>) -> io::Result<Rc<Self>> {
         let header = pst.header();
         let root = header.root();
 
         let (node_btree, block_btree, properties) = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -295,12 +293,12 @@ impl<'a> UnicodeStore<'a> {
             (node_btree, block_btree, properties)
         };
 
-        Ok(Self {
+        Ok(Rc::new(Self {
             pst,
             node_btree,
             block_btree,
             properties,
-        })
+        }))
     }
 
     pub fn properties(&self) -> &StoreProperties {
@@ -314,7 +312,7 @@ impl<'a> UnicodeStore<'a> {
         let hierarchy_table = {
             let mut file = self
                 .pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -338,7 +336,7 @@ impl<'a> UnicodeStore<'a> {
     ) -> io::Result<PropertyValue> {
         let mut file = self
             .pst
-            .file()
+            .reader()
             .lock()
             .map_err(|_| MessagingError::FailedToLockFile)?;
         let file = &mut *file;
@@ -350,16 +348,16 @@ impl<'a> UnicodeStore<'a> {
     }
 }
 
-pub struct AnsiStore<'a> {
-    pst: &'a AnsiPstFile,
+pub struct AnsiStore {
+    pst: Rc<AnsiPstFile>,
     node_btree: AnsiNodeBTree,
     block_btree: AnsiBlockBTree,
     properties: StoreProperties,
 }
 
-impl<'a> AnsiStore<'a> {
-    pub fn pst(&self) -> &AnsiPstFile {
-        self.pst
+impl AnsiStore {
+    pub fn pst(&self) -> &Rc<AnsiPstFile> {
+        &self.pst
     }
 
     pub fn node_btree(&self) -> &AnsiNodeBTree {
@@ -370,13 +368,13 @@ impl<'a> AnsiStore<'a> {
         &self.block_btree
     }
 
-    pub fn read(pst: &'a AnsiPstFile) -> io::Result<Self> {
+    pub fn read(pst: Rc<AnsiPstFile>) -> io::Result<Rc<Self>> {
         let header = pst.header();
         let root = header.root();
 
         let (node_btree, block_btree, properties) = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -407,12 +405,12 @@ impl<'a> AnsiStore<'a> {
             (node_btree, block_btree, properties)
         };
 
-        Ok(Self {
+        Ok(Rc::new(Self {
             pst,
             node_btree,
             block_btree,
             properties,
-        })
+        }))
     }
 
     pub fn properties(&self) -> &StoreProperties {
@@ -426,7 +424,7 @@ impl<'a> AnsiStore<'a> {
         let hierarchy_table = {
             let mut file = self
                 .pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -450,7 +448,7 @@ impl<'a> AnsiStore<'a> {
     ) -> io::Result<PropertyValue> {
         let mut file = self
             .pst
-            .file()
+            .reader()
             .lock()
             .map_err(|_| MessagingError::FailedToLockFile)?;
         let file = &mut *file;

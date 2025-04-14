@@ -1,6 +1,6 @@
 //! ## [Message Objects](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/1042af37-aaa4-4edc-bffd-90a1ede24188)
 
-use std::{collections::BTreeMap, io};
+use std::{collections::BTreeMap, io, rc::Rc};
 
 use super::{store::*, *};
 use crate::{
@@ -19,11 +19,12 @@ use crate::{
         header::Header,
         node_id::{NodeId, NodeIdType},
         page::{
-            AnsiBlockBTree, AnsiNodeBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, RootBTree,
-            UnicodeBlockBTree, UnicodeNodeBTree, UnicodeNodeBTreeEntry,
+            AnsiBlockBTree, AnsiNodeBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, UnicodeBlockBTree,
+            UnicodeNodeBTree, UnicodeNodeBTreeEntry,
         },
         root::Root,
     },
+    PstFile,
 };
 
 #[derive(Default, Debug)]
@@ -138,24 +139,24 @@ impl MessageProperties {
 pub type UnicodeMessageSubNodes = BTreeMap<NodeId, UnicodeLeafSubNodeTreeEntry>;
 pub type AnsiMessageSubNodes = BTreeMap<NodeId, AnsiLeafSubNodeTreeEntry>;
 
-pub struct UnicodeMessage<'a> {
-    store: &'a UnicodeStore<'a>,
+pub struct UnicodeMessage {
+    store: Rc<UnicodeStore>,
     properties: MessageProperties,
     sub_nodes: UnicodeMessageSubNodes,
     recipient_table: UnicodeTableContext,
     attachment_table: Option<UnicodeTableContext>,
 }
 
-impl<'a> UnicodeMessage<'a> {
-    pub fn store(&self) -> &UnicodeStore {
-        self.store
+impl UnicodeMessage {
+    pub fn store(&self) -> &Rc<UnicodeStore> {
+        &self.store
     }
 
     pub fn read(
-        store: &'a UnicodeStore,
+        store: Rc<UnicodeStore>,
         entry_id: &EntryId,
         prop_ids: Option<&[u16]>,
-    ) -> io::Result<Self> {
+    ) -> io::Result<Rc<Self>> {
         let node_id = entry_id.node_id();
         let node_id_type = node_id.id_type()?;
         match node_id_type {
@@ -174,7 +175,7 @@ impl<'a> UnicodeMessage<'a> {
 
         let node = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -188,17 +189,17 @@ impl<'a> UnicodeMessage<'a> {
     }
 
     pub fn read_embedded(
-        store: &'a UnicodeStore,
+        store: Rc<UnicodeStore>,
         node: UnicodeNodeBTreeEntry,
         prop_ids: Option<&[u16]>,
-    ) -> io::Result<Self> {
+    ) -> io::Result<Rc<Self>> {
         let pst = store.pst();
         let header = pst.header();
         let root = header.root();
 
         let (properties, sub_nodes, recipient_table, attachment_table) = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -286,13 +287,13 @@ impl<'a> UnicodeMessage<'a> {
             (properties, sub_nodes, recipient_table, attachment_table)
         };
 
-        Ok(Self {
+        Ok(Rc::new(Self {
             store,
             properties,
             sub_nodes,
             recipient_table,
             attachment_table,
-        })
+        }))
     }
 
     pub fn properties(&self) -> &MessageProperties {
@@ -312,24 +313,24 @@ impl<'a> UnicodeMessage<'a> {
     }
 }
 
-pub struct AnsiMessage<'a> {
-    store: &'a AnsiStore<'a>,
+pub struct AnsiMessage {
+    store: Rc<AnsiStore>,
     properties: MessageProperties,
     sub_nodes: AnsiMessageSubNodes,
     recipient_table: AnsiTableContext,
     attachment_table: Option<AnsiTableContext>,
 }
 
-impl<'a> AnsiMessage<'a> {
-    pub fn store(&self) -> &AnsiStore {
-        self.store
+impl AnsiMessage {
+    pub fn store(&self) -> &Rc<AnsiStore> {
+        &self.store
     }
 
     pub fn read(
-        store: &'a AnsiStore,
+        store: Rc<AnsiStore>,
         entry_id: &EntryId,
         prop_ids: Option<&[u16]>,
-    ) -> io::Result<Self> {
+    ) -> io::Result<Rc<Self>> {
         let node_id = entry_id.node_id();
         let node_id_type = node_id.id_type()?;
         match node_id_type {
@@ -348,7 +349,7 @@ impl<'a> AnsiMessage<'a> {
 
         let node = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -362,17 +363,17 @@ impl<'a> AnsiMessage<'a> {
     }
 
     pub fn read_embedded(
-        store: &'a AnsiStore,
+        store: Rc<AnsiStore>,
         node: AnsiNodeBTreeEntry,
         prop_ids: Option<&[u16]>,
-    ) -> io::Result<Self> {
+    ) -> io::Result<Rc<Self>> {
         let pst = store.pst();
         let header = pst.header();
         let root = header.root();
 
         let (properties, sub_nodes, recipient_table, attachment_table) = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -457,13 +458,13 @@ impl<'a> AnsiMessage<'a> {
             (properties, sub_nodes, recipient_table, attachment_table)
         };
 
-        Ok(Self {
+        Ok(Rc::new(Self {
             store,
             properties,
             sub_nodes,
             recipient_table,
             attachment_table,
-        })
+        }))
     }
 
     pub fn properties(&self) -> &MessageProperties {

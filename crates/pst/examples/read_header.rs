@@ -3,28 +3,38 @@ use outlook_pst::{
     ndb::{header::Header, root::Root},
     *,
 };
+use std::fmt::Debug;
 
 mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
 
-    if let Ok(pst) = UnicodePstFile::read(&args.file) {
-        let header = pst.header();
-        read_header(header);
+    if let Ok(pst) = UnicodePstFile::open(&args.file) {
+        read_header(pst);
     } else {
-        let pst = AnsiPstFile::read(&args.file)?;
-        let header = pst.header();
-        read_header(header);
+        let pst = AnsiPstFile::open(&args.file)?;
+        read_header(pst);
     }
 
     Ok(())
 }
 
-fn read_header(header: &impl Header) {
+fn read_header<Pst>(pst: Pst)
+where
+    Pst: PstFile,
+    <Pst as PstFile>::BlockId: Debug,
+    <Pst as PstFile>::ByteIndex: Debug,
+    <Pst as PstFile>::BlockRef: Debug,
+{
+    let header = pst.header();
     let version = header.version();
+    let next_block = header.next_block();
+    let next_page = header.next_page();
 
     println!("File Version: {version:?}");
+    println!("Next Block: {next_block:?}");
+    println!("Next Page: {next_page:?}");
 
     let root = header.root();
     let file_eof_index = root.file_eof_index();

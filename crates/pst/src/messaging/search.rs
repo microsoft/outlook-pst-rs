@@ -9,7 +9,7 @@ use crate::ndb::{
     header::NdbCryptMethod,
     node_id::NodeId,
     page::{
-        AnsiBlockBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, RootBTree, UnicodeBlockBTree,
+        AnsiBlockBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, UnicodeBlockBTree,
         UnicodeNodeBTreeEntry,
     },
 };

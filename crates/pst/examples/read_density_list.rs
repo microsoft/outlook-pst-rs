@@ -1,38 +1,36 @@
 use clap::Parser;
-use outlook_pst::{
-    ndb::page::{DensityListPage, PageTrailer},
-    *,
-};
+use outlook_pst::{ndb::page::PageTrailer, *};
+use std::fmt::Debug;
 
 mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    if let Ok(pst) = UnicodePstFile::read(&args.file) {
-        let density_list = pst.density_list();
-        match density_list {
-            Ok(density_list) => read_density_list(density_list),
-            Err(err) => {
-                println!("Error: {err:?}");
-                return Ok(());
-            }
-        };
+    if let Ok(pst) = UnicodePstFile::open(&args.file) {
+        read_density_list(pst);
     } else {
-        let pst = AnsiPstFile::read(&args.file)?;
-        let density_list = pst.density_list();
-        match density_list {
-            Ok(density_list) => read_density_list(density_list),
-            Err(err) => {
-                println!("Error: {err:?}");
-                return Ok(());
-            }
-        };
+        let pst = AnsiPstFile::open(&args.file)?;
+        read_density_list(pst);
     }
 
     Ok(())
 }
 
-fn read_density_list(density_list: &impl DensityListPage) {
+fn read_density_list<Pst>(pst: Pst)
+where
+    Pst: PstFile,
+    <Pst as PstFile>::BlockId: Debug,
+    <Pst as PstFile>::ByteIndex: Debug,
+{
+    let density_list = pst.density_list();
+    let density_list = match density_list {
+        Ok(density_list) => density_list,
+        Err(err) => {
+            println!("Error: {err:?}");
+            return;
+        }
+    };
+
     let backfill_complete = density_list.backfill_complete();
     let current_page = density_list.current_page();
     let entries = density_list.entries();

@@ -3,16 +3,19 @@ use outlook_pst::{
     messaging::{folder::UnicodeFolder, store::UnicodeStore},
     *,
 };
+use std::rc::Rc;
 
 mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    let pst = UnicodePstFile::read(&args.file).unwrap();
-    let store = UnicodeStore::read(&pst).unwrap();
+    let pst = UnicodePstFile::open(&args.file).unwrap();
+    let store = UnicodeStore::read(Rc::new(pst)).unwrap();
     let ipm_sub_tree = store.properties().ipm_sub_tree_entry_id()?;
-    let folder = UnicodeFolder::read(&store, &ipm_sub_tree)?;
-    let hierarchy_table = folder.hierarchy_table();
+    let folder = UnicodeFolder::read(store.clone(), &ipm_sub_tree)?;
+    let hierarchy_table = folder.hierarchy_table().ok_or(anyhow::anyhow!(
+        "No hierarchy table found for the IPM Subtree."
+    ))?;
     let context = hierarchy_table.context();
 
     for row in hierarchy_table.rows_matrix() {

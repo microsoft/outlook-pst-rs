@@ -4,20 +4,21 @@ use outlook_pst::{
     messaging::store::{AnsiStore, StoreProperties, UnicodeStore},
     *,
 };
+use std::rc::Rc;
 
 mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    if let Ok(pst) = UnicodePstFile::read(&args.file) {
-        let store = UnicodeStore::read(&pst).unwrap();
+    if let Ok(pst) = UnicodePstFile::open(&args.file) {
+        let store = UnicodeStore::read(Rc::new(pst)).unwrap();
         let properties = store.properties();
-        read_store_props(&properties)
+        read_store_props(properties)
     } else {
-        let pst = AnsiPstFile::read(&args.file)?;
-        let store = AnsiStore::read(&pst)?;
+        let pst = AnsiPstFile::open(&args.file)?;
+        let store = AnsiStore::read(Rc::new(pst))?;
         let properties = store.properties();
-        read_store_props(&properties)
+        read_store_props(properties)
     }
 }
 

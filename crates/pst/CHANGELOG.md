@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0](https://github.com/microsoft/outlook-pst-rs/compare/outlook-pst-v0.1.2...outlook-pst-v1.0.0) - 2025-04-11
+
+### Added
+- output some more information from read_header example
+- hide start_write/finish_write in PstFileLockGuard type
+- implement FMAP pages
+- mark blocks in AMAP rebuild
+- implement BBT portion of AMAP rebuild
+- implement NBT portion of AMAP rebuild
+- start collecting types in PstFile trait
+
+### Fixed
+- simplify trait bounds with Into<u64> on BlockId and ByteIndex
+- some sub-tables may be missing on some folders
+- ignore the lowest bit of BIDs in block BTree lookups
+- refactor max_free_slots into generalized find_free_bits
+- different padding in AnsiMapPage types
+- count bits within bytes
+
 ## [0.1.2](https://github.com/microsoft/outlook-pst-rs/compare/outlook-pst-v0.1.1...outlook-pst-v0.1.2) - 2025-03-12
 
 ### Fixed

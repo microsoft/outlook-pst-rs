@@ -5,6 +5,7 @@ use std::{
     collections::BTreeMap,
     fmt::Display,
     io::{self, Cursor, Read, Seek, SeekFrom, Write},
+    rc::Rc,
 };
 
 use super::{read_write::*, store::*, *};
@@ -22,11 +23,11 @@ use crate::{
         header::Header,
         node_id::NID_NAME_TO_ID_MAP,
         page::{
-            AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, RootBTree, UnicodeBlockBTree,
-            UnicodeNodeBTree,
+            AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, UnicodeBlockBTree, UnicodeNodeBTree,
         },
         root::Root,
     },
+    PstFile,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -455,24 +456,24 @@ impl NamedPropertyMapProperties {
     }
 }
 
-pub struct UnicodeNamedPropertyMap<'a> {
-    store: &'a UnicodeStore<'a>,
+pub struct UnicodeNamedPropertyMap {
+    store: Rc<UnicodeStore>,
     properties: NamedPropertyMapProperties,
 }
 
-impl<'a> UnicodeNamedPropertyMap<'a> {
-    pub fn store(&self) -> &UnicodeStore {
-        self.store
+impl UnicodeNamedPropertyMap {
+    pub fn store(&self) -> &Rc<UnicodeStore> {
+        &self.store
     }
 
-    pub fn read(store: &'a UnicodeStore) -> io::Result<Self> {
+    pub fn read(store: Rc<UnicodeStore>) -> io::Result<Rc<Self>> {
         let pst = store.pst();
         let header = pst.header();
         let root = header.root();
 
         let properties = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -501,7 +502,7 @@ impl<'a> UnicodeNamedPropertyMap<'a> {
             NamedPropertyMapProperties { properties }
         };
 
-        Ok(Self { store, properties })
+        Ok(Rc::new(Self { store, properties }))
     }
 
     pub fn properties(&self) -> &NamedPropertyMapProperties {
@@ -509,24 +510,24 @@ impl<'a> UnicodeNamedPropertyMap<'a> {
     }
 }
 
-pub struct AnsiNamedPropertyMap<'a> {
-    store: &'a AnsiStore<'a>,
+pub struct AnsiNamedPropertyMap {
+    store: Rc<AnsiStore>,
     properties: NamedPropertyMapProperties,
 }
 
-impl<'a> AnsiNamedPropertyMap<'a> {
-    pub fn store(&self) -> &AnsiStore {
-        self.store
+impl AnsiNamedPropertyMap {
+    pub fn store(&self) -> &Rc<AnsiStore> {
+        &self.store
     }
 
-    pub fn read(store: &'a AnsiStore) -> io::Result<Self> {
+    pub fn read(store: Rc<AnsiStore>) -> io::Result<Rc<Self>> {
         let pst = store.pst();
         let header = pst.header();
         let root = header.root();
 
         let properties = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -555,7 +556,7 @@ impl<'a> AnsiNamedPropertyMap<'a> {
             NamedPropertyMapProperties { properties }
         };
 
-        Ok(Self { store, properties })
+        Ok(Rc::new(Self { store, properties }))
     }
 
     pub fn properties(&self) -> &NamedPropertyMapProperties {

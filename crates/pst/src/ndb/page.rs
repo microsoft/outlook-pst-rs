@@ -6,10 +6,11 @@ use std::{
     fmt::Debug,
     io::{self, Cursor, Read, Seek, SeekFrom, Write},
     marker::PhantomData,
+    ops::Range,
 };
 
 use super::{block_id::*, block_ref::*, byte_index::*, node_id::*, read_write::*, *};
-use crate::{block_sig::compute_sig, crc::compute_crc};
+use crate::{block_sig::compute_sig, crc::compute_crc, AnsiPstFile, PstFile, UnicodePstFile};
 
 /// `ptype`
 ///
@@ -63,6 +64,8 @@ impl PageType {
         }
     }
 }
+
+pub const PAGE_SIZE: usize = 512;
 
 /// [PAGETRAILER](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/f4ccb38a-930a-4db4-98df-a69c195926ba)
 pub trait PageTrailer {
@@ -206,11 +209,122 @@ impl PageTrailerReadWrite for AnsiPageTrailer {
 
 pub type MapBits = [u8; 496];
 
-pub trait MapPage {
-    type Trailer: PageTrailer;
-
+pub trait MapPage<Pst, const PAGE_TYPE: u8>
+where
+    Pst: PstFile,
+{
     fn map_bits(&self) -> &MapBits;
-    fn trailer(&self) -> &Self::Trailer;
+    fn map_bits_mut(&mut self) -> &mut MapBits;
+    fn trailer(&self) -> &Pst::PageTrailer;
+}
+
+/// [AMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/43d8f556-2c0e-4976-8ec7-84e57f8b1234)
+pub trait AllocationMapPage<Pst>: MapPage<Pst, { PageType::AllocationMap as u8 }>
+where
+    Pst: PstFile,
+{
+    fn find_free_bits(&self, max_size: u16) -> Range<u16> {
+        let mut max_free_slots = 0..0;
+        let mut current = 0..0;
+
+        for &page in self.map_bits() {
+            if page == 0 {
+                current.end += 8;
+            } else {
+                let leading_zero = (0..8).take_while(|&i| page & (0x80 >> i) == 0).count() as u16;
+                let trailing_zero = (0..8).take_while(|&i| page & (0x01 << i) == 0).count() as u16;
+                assert!(leading_zero + trailing_zero < 8, "leading_zero: {leading_zero}, trailing_zero: {trailing_zero} for page: 0x{page:02X}");
+
+                let page_offset = current.end + 8;
+                current.end += leading_zero;
+
+                if current.len() > max_free_slots.len() {
+                    max_free_slots = current.clone();
+                }
+
+                if (max_free_slots.end - max_free_slots.start + 2)
+                    < (8 - trailing_zero - leading_zero)
+                {
+                    let mut current = page_offset..page_offset;
+                    for i in (leading_zero + 1)..(7 - trailing_zero) {
+                        if page & (0x80 >> i) == 0 {
+                            current.end += 1;
+                        } else {
+                            if current.len() > max_free_slots.len() {
+                                max_free_slots = current.clone();
+                            }
+                            current.start = current.end;
+                        }
+                    }
+
+                    if current.len() > max_free_slots.len() {
+                        max_free_slots = current;
+                    }
+                }
+
+                current = (page_offset - trailing_zero)..page_offset;
+            }
+
+            if current.end - current.start >= max_size {
+                break;
+            }
+        }
+
+        if current.len() > max_free_slots.len() {
+            max_free_slots = current;
+        }
+
+        (max_free_slots.start)..(max_free_slots.end.max(max_free_slots.start + max_size))
+    }
+}
+
+impl<Pst, Page> AllocationMapPage<Pst> for Page
+where
+    Pst: PstFile,
+    Page: MapPage<Pst, { PageType::AllocationMap as u8 }>,
+{
+}
+
+/// [PMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/7e64a91f-cbd1-4a11-90c9-df5789e7d9a1)
+pub trait AllocationPageMapPage<Pst>: MapPage<Pst, { PageType::AllocationPageMap as u8 }>
+where
+    Pst: PstFile,
+{
+}
+
+impl<Pst, Page> AllocationPageMapPage<Pst> for Page
+where
+    Pst: PstFile,
+    Page: MapPage<Pst, { PageType::AllocationPageMap as u8 }>,
+{
+}
+
+/// [FMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/26273ead-797e-4ea6-9b3c-9b9a5c581115)
+pub trait FreeMapPage<Pst>: MapPage<Pst, { PageType::FreeMap as u8 }>
+where
+    Pst: PstFile,
+{
+}
+
+impl<Pst, Page> FreeMapPage<Pst> for Page
+where
+    Pst: PstFile,
+    Page: MapPage<Pst, { PageType::FreeMap as u8 }>,
+{
+}
+
+/// [FPMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/913a72b0-83f6-4c29-8b0b-40967579a534)
+pub trait FreePageMapPage<Pst>: MapPage<Pst, { PageType::FreePageMap as u8 }>
+where
+    Pst: PstFile,
+{
+}
+
+impl<Pst, Page> FreePageMapPage<Pst> for Page
+where
+    Pst: PstFile,
+    Page: MapPage<Pst, { PageType::FreePageMap as u8 }>,
+{
 }
 
 pub struct UnicodeMapPage<const P: u8> {
@@ -218,11 +332,13 @@ pub struct UnicodeMapPage<const P: u8> {
     trailer: UnicodePageTrailer,
 }
 
-impl<const P: u8> MapPage for UnicodeMapPage<P> {
-    type Trailer = UnicodePageTrailer;
-
+impl<const PAGE_TYPE: u8> MapPage<UnicodePstFile, PAGE_TYPE> for UnicodeMapPage<PAGE_TYPE> {
     fn map_bits(&self) -> &MapBits {
         &self.map_bits
+    }
+
+    fn map_bits_mut(&mut self) -> &mut MapBits {
+        &mut self.map_bits
     }
 
     fn trailer(&self) -> &UnicodePageTrailer {
@@ -230,11 +346,11 @@ impl<const P: u8> MapPage for UnicodeMapPage<P> {
     }
 }
 
-impl<const P: u8> MapPageReadWrite for UnicodeMapPage<P> {
-    const PAGE_TYPE: u8 = P;
-
+impl<const PAGE_TYPE: u8> MapPageReadWrite<UnicodePstFile, PAGE_TYPE>
+    for UnicodeMapPage<PAGE_TYPE>
+{
     fn new(map_bits: MapBits, trailer: UnicodePageTrailer) -> NdbResult<Self> {
-        if trailer.page_type() as u8 != Self::PAGE_TYPE {
+        if trailer.page_type() as u8 != PAGE_TYPE {
             return Err(NdbError::UnexpectedPageType(trailer.page_type()));
         }
         Ok(Self { map_bits, trailer })
@@ -245,7 +361,7 @@ impl<const P: u8> MapPageReadWrite for UnicodeMapPage<P> {
         f.read_exact(&mut map_bits)?;
 
         let trailer = UnicodePageTrailer::read(f)?;
-        if trailer.page_type() as u8 != Self::PAGE_TYPE {
+        if trailer.page_type() as u8 != PAGE_TYPE {
             return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
         }
 
@@ -269,25 +385,19 @@ impl<const P: u8> MapPageReadWrite for UnicodeMapPage<P> {
     }
 }
 
-/// [AMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/43d8f556-2c0e-4976-8ec7-84e57f8b1234)
-pub type UnicodeAllocationMapPage = UnicodeMapPage<{ PageType::AllocationMap as u8 }>;
-/// [PMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/7e64a91f-cbd1-4a11-90c9-df5789e7d9a1)
-pub type UnicodeAllocationPageMapPage = UnicodeMapPage<{ PageType::AllocationPageMap as u8 }>;
-/// [FMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/26273ead-797e-4ea6-9b3c-9b9a5c581115)
-pub type UnicodeFreeMapPage = UnicodeMapPage<{ PageType::FreeMap as u8 }>;
-/// [FPMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/913a72b0-83f6-4c29-8b0b-40967579a534)
-pub type UnicodeFreePageMapPage = UnicodeMapPage<{ PageType::FreePageMap as u8 }>;
-
 pub struct AnsiMapPage<const P: u8> {
     map_bits: MapBits,
     trailer: AnsiPageTrailer,
+    padding: u32,
 }
 
-impl<const P: u8> MapPage for AnsiMapPage<P> {
-    type Trailer = AnsiPageTrailer;
-
+impl<const PAGE_TYPE: u8> MapPage<AnsiPstFile, PAGE_TYPE> for AnsiMapPage<PAGE_TYPE> {
     fn map_bits(&self) -> &MapBits {
         &self.map_bits
+    }
+
+    fn map_bits_mut(&mut self) -> &mut MapBits {
+        &mut self.map_bits
     }
 
     fn trailer(&self) -> &AnsiPageTrailer {
@@ -295,16 +405,17 @@ impl<const P: u8> MapPage for AnsiMapPage<P> {
     }
 }
 
-impl<const P: u8> MapPageReadWrite for AnsiMapPage<P> {
-    const PAGE_TYPE: u8 = P;
-
+impl MapPageReadWrite<AnsiPstFile, { PageType::AllocationMap as u8 }>
+    for AnsiMapPage<{ PageType::AllocationMap as u8 }>
+{
     fn new(amap_bits: MapBits, trailer: AnsiPageTrailer) -> NdbResult<Self> {
-        if trailer.page_type() as u8 != Self::PAGE_TYPE {
+        if trailer.page_type() != PageType::AllocationMap {
             return Err(NdbError::UnexpectedPageType(trailer.page_type()));
         }
         Ok(Self {
             map_bits: amap_bits,
             trailer,
+            padding: 0,
         })
     }
 
@@ -314,9 +425,6 @@ impl<const P: u8> MapPageReadWrite for AnsiMapPage<P> {
         let mut cursor = Cursor::new(buffer);
 
         let padding = cursor.read_u32::<LittleEndian>()?;
-        if padding != 0 {
-            return Err(NdbError::InvalidAnsiMapPagePadding(padding).into());
-        }
 
         let mut map_bits = [0_u8; mem::size_of::<MapBits>()];
         cursor.read_exact(&mut map_bits)?;
@@ -324,7 +432,7 @@ impl<const P: u8> MapPageReadWrite for AnsiMapPage<P> {
         let buffer = cursor.into_inner();
 
         let trailer = AnsiPageTrailer::read(f)?;
-        if trailer.page_type() as u8 != Self::PAGE_TYPE {
+        if trailer.page_type() != PageType::AllocationMap {
             return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
         }
 
@@ -333,13 +441,17 @@ impl<const P: u8> MapPageReadWrite for AnsiMapPage<P> {
             return Err(NdbError::InvalidPageCrc(crc).into());
         }
 
-        Ok(Self { map_bits, trailer })
+        Ok(Self {
+            map_bits,
+            trailer,
+            padding,
+        })
     }
 
     fn write(&self, f: &mut dyn Write) -> io::Result<()> {
         let mut cursor = Cursor::new([0_u8; 500]);
 
-        cursor.write_u32::<LittleEndian>(0)?;
+        cursor.write_u32::<LittleEndian>(self.padding)?;
         cursor.write_all(&self.map_bits)?;
 
         let buffer = cursor.into_inner();
@@ -355,14 +467,191 @@ impl<const P: u8> MapPageReadWrite for AnsiMapPage<P> {
     }
 }
 
-/// [AMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/43d8f556-2c0e-4976-8ec7-84e57f8b1234)
-pub type AnsiAllocationMapPage = AnsiMapPage<{ PageType::AllocationMap as u8 }>;
-/// [PMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/7e64a91f-cbd1-4a11-90c9-df5789e7d9a1)
-pub type AnsiAllocationPageMapPage = AnsiMapPage<{ PageType::AllocationPageMap as u8 }>;
-/// [FMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/26273ead-797e-4ea6-9b3c-9b9a5c581115)
-pub type AnsiFreeMapPage = AnsiMapPage<{ PageType::FreeMap as u8 }>;
-/// [FPMAPPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/913a72b0-83f6-4c29-8b0b-40967579a534)
-pub type AnsiFreePageMapPage = AnsiMapPage<{ PageType::FreePageMap as u8 }>;
+impl MapPageReadWrite<AnsiPstFile, { PageType::AllocationPageMap as u8 }>
+    for AnsiMapPage<{ PageType::AllocationPageMap as u8 }>
+{
+    fn new(amap_bits: MapBits, trailer: AnsiPageTrailer) -> NdbResult<Self> {
+        if trailer.page_type() != PageType::AllocationPageMap {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()));
+        }
+        Ok(Self {
+            map_bits: amap_bits,
+            trailer,
+            padding: 0,
+        })
+    }
+
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let mut buffer = [0_u8; 500];
+        f.read_exact(&mut buffer)?;
+        let mut cursor = Cursor::new(buffer);
+
+        let padding = cursor.read_u32::<LittleEndian>()?;
+
+        let mut map_bits = [0_u8; mem::size_of::<MapBits>()];
+        cursor.read_exact(&mut map_bits)?;
+
+        let buffer = cursor.into_inner();
+
+        let trailer = AnsiPageTrailer::read(f)?;
+        if trailer.page_type() != PageType::AllocationPageMap {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
+        }
+
+        let crc = compute_crc(0, &buffer);
+        if crc != trailer.crc() {
+            return Err(NdbError::InvalidPageCrc(crc).into());
+        }
+
+        Ok(Self {
+            map_bits,
+            trailer,
+            padding,
+        })
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        let mut cursor = Cursor::new([0_u8; 500]);
+
+        cursor.write_u32::<LittleEndian>(self.padding)?;
+        cursor.write_all(&self.map_bits)?;
+
+        let buffer = cursor.into_inner();
+        let crc = compute_crc(0, &buffer);
+
+        f.write_all(&buffer)?;
+
+        let trailer = AnsiPageTrailer {
+            crc,
+            ..self.trailer
+        };
+        trailer.write(f)
+    }
+}
+
+impl MapPageReadWrite<AnsiPstFile, { PageType::FreeMap as u8 }>
+    for AnsiMapPage<{ PageType::FreeMap as u8 }>
+{
+    fn new(amap_bits: MapBits, trailer: AnsiPageTrailer) -> NdbResult<Self> {
+        if trailer.page_type() != PageType::FreeMap {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()));
+        }
+        Ok(Self {
+            map_bits: amap_bits,
+            trailer,
+            padding: 0,
+        })
+    }
+
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let mut buffer = [0_u8; 500];
+        f.read_exact(&mut buffer)?;
+        let mut cursor = Cursor::new(buffer);
+
+        let mut map_bits = [0_u8; mem::size_of::<MapBits>()];
+        cursor.read_exact(&mut map_bits)?;
+
+        let padding = cursor.read_u32::<LittleEndian>()?;
+
+        let buffer = cursor.into_inner();
+
+        let trailer = AnsiPageTrailer::read(f)?;
+        if trailer.page_type() != PageType::FreeMap {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
+        }
+
+        let crc = compute_crc(0, &buffer);
+        if crc != trailer.crc() {
+            return Err(NdbError::InvalidPageCrc(crc).into());
+        }
+
+        Ok(Self {
+            map_bits,
+            trailer,
+            padding,
+        })
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        let mut cursor = Cursor::new([0_u8; 500]);
+
+        cursor.write_all(&self.map_bits)?;
+        cursor.write_u32::<LittleEndian>(self.padding)?;
+
+        let buffer = cursor.into_inner();
+        let crc = compute_crc(0, &buffer);
+
+        f.write_all(&buffer)?;
+
+        let trailer = AnsiPageTrailer {
+            crc,
+            ..self.trailer
+        };
+        trailer.write(f)
+    }
+}
+
+impl MapPageReadWrite<AnsiPstFile, { PageType::FreePageMap as u8 }>
+    for AnsiMapPage<{ PageType::FreePageMap as u8 }>
+{
+    fn new(amap_bits: MapBits, trailer: AnsiPageTrailer) -> NdbResult<Self> {
+        if trailer.page_type() != PageType::FreePageMap {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()));
+        }
+        Ok(Self {
+            map_bits: amap_bits,
+            trailer,
+            padding: 0,
+        })
+    }
+
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let mut buffer = [0_u8; 500];
+        f.read_exact(&mut buffer)?;
+        let mut cursor = Cursor::new(buffer);
+
+        let mut map_bits = [0_u8; mem::size_of::<MapBits>()];
+        cursor.read_exact(&mut map_bits)?;
+
+        let padding = cursor.read_u32::<LittleEndian>()?;
+
+        let buffer = cursor.into_inner();
+
+        let trailer = AnsiPageTrailer::read(f)?;
+        if trailer.page_type() != PageType::FreePageMap {
+            return Err(NdbError::UnexpectedPageType(trailer.page_type()).into());
+        }
+
+        let crc = compute_crc(0, &buffer);
+        if crc != trailer.crc() {
+            return Err(NdbError::InvalidPageCrc(crc).into());
+        }
+
+        Ok(Self {
+            map_bits,
+            trailer,
+            padding,
+        })
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        let mut cursor = Cursor::new([0_u8; 500]);
+
+        cursor.write_all(&self.map_bits)?;
+        cursor.write_u32::<LittleEndian>(self.padding)?;
+
+        let buffer = cursor.into_inner();
+        let crc = compute_crc(0, &buffer);
+
+        f.write_all(&buffer)?;
+
+        let trailer = AnsiPageTrailer {
+            crc,
+            ..self.trailer
+        };
+        trailer.write(f)
+    }
+}
 
 const DENSITY_LIST_ENTRY_PAGE_NUMBER_MASK: u32 = 0x000F_FFFF;
 
@@ -402,13 +691,14 @@ impl DensityListPageEntry {
 const DENSITY_LIST_FILE_OFFSET: u32 = 0x4200;
 
 /// [DLISTPAGE](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/5d426b2d-ec10-4614-b768-46813652d5e3)
-pub trait DensityListPage {
-    type Trailer: PageTrailer;
-
+pub trait DensityListPage<Pst>
+where
+    Pst: PstFile,
+{
     fn backfill_complete(&self) -> bool;
     fn current_page(&self) -> u32;
     fn entries(&self) -> &[DensityListPageEntry];
-    fn trailer(&self) -> &Self::Trailer;
+    fn trailer(&self) -> &<Pst as PstFile>::PageTrailer;
 }
 
 const MAX_UNICODE_DENSITY_LIST_ENTRY_COUNT: usize = 476 / mem::size_of::<DensityListPageEntry>();
@@ -421,9 +711,7 @@ pub struct UnicodeDensityListPage {
     trailer: UnicodePageTrailer,
 }
 
-impl DensityListPage for UnicodeDensityListPage {
-    type Trailer = UnicodePageTrailer;
-
+impl DensityListPage<UnicodePstFile> for UnicodeDensityListPage {
     fn backfill_complete(&self) -> bool {
         self.backfill_complete
     }
@@ -441,7 +729,7 @@ impl DensityListPage for UnicodeDensityListPage {
     }
 }
 
-impl DensityListPageReadWrite for UnicodeDensityListPage {
+impl DensityListPageReadWrite<UnicodePstFile> for UnicodeDensityListPage {
     fn new(
         backfill_complete: bool,
         current_page: u32,
@@ -582,9 +870,7 @@ pub struct AnsiDensityListPage {
     trailer: AnsiPageTrailer,
 }
 
-impl DensityListPage for AnsiDensityListPage {
-    type Trailer = AnsiPageTrailer;
-
+impl DensityListPage<AnsiPstFile> for AnsiDensityListPage {
     fn backfill_complete(&self) -> bool {
         self.backfill_complete
     }
@@ -602,7 +888,7 @@ impl DensityListPage for AnsiDensityListPage {
     }
 }
 
-impl DensityListPageReadWrite for AnsiDensityListPage {
+impl DensityListPageReadWrite<AnsiPstFile> for AnsiDensityListPage {
     fn new(
         backfill_complete: bool,
         current_page: u32,
@@ -733,8 +1019,13 @@ impl DensityListPageReadWrite for AnsiDensityListPage {
     }
 }
 
-pub trait BTreeEntry {
-    type Key: Copy + Sized;
+pub trait BTreeEntryKey: Copy + Sized + Into<u64> {}
+
+impl BTreeEntryKey for u32 {}
+impl BTreeEntryKey for u64 {}
+
+pub trait BTreeEntry: Copy + Sized {
+    type Key: BTreeEntryKey;
 
     fn key(&self) -> Self::Key;
 }
@@ -1708,183 +1999,337 @@ impl BTreePageReadWrite for AnsiNodeBTreePage {
 
 impl AnsiBTreePageReadWrite<AnsiNodeBTreeEntry> for AnsiNodeBTreePage {}
 
-pub trait RootBTree: Sized {
-    type Entry: BTreeEntry<Key: BTreePageKeyReadWrite> + BTreeEntryReadWrite;
-    type Block: BlockRefReadWrite<Block: BlockIdReadWrite, Index: ByteIndexReadWrite>;
-    type Trailer: PageTrailerReadWrite;
-    type IntermediateEntry: BTreeEntry<Key = <Self::Entry as BTreeEntry>::Key>
-        + BTreePageEntry<Block: BlockRefReadWrite<Block: BlockIdReadWrite, Index: ByteIndexReadWrite>>
-        + BTreePageEntryReadWrite;
-    type IntermediatePage: BTreePageReadWrite<
-        Entry = Self::IntermediateEntry,
-        Trailer = Self::Trailer,
+pub trait RootBTreeIntermediatePage<Pst, Entry, LeafPage>
+where
+    Pst: PstFile,
+    Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey>,
+    LeafPage: RootBTreeLeafPage<Pst, Entry = Entry>,
+    Self: BTreePage<
+        Entry = <Self as RootBTreeIntermediatePage<Pst, Entry, LeafPage>>::Entry,
+        Trailer = <Pst as PstFile>::PageTrailer,
+    >,
+{
+    type Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey>
+        + BTreePageEntry<Block = <Pst as PstFile>::BlockRef>;
+    type Page: BTreePageReadWrite<
+        Entry = <Self as RootBTreeIntermediatePage<Pst, Entry, LeafPage>>::Entry,
+        Trailer = <Pst as PstFile>::PageTrailer,
     >;
-    type LeafPage: BTreePageReadWrite<Entry = Self::Entry, Trailer = Self::Trailer>;
+}
 
-    fn read<R: Read + Seek>(f: &mut R, block: Self::Block) -> io::Result<Self>;
-    fn write<W: Write + Seek>(&self, f: &mut W, block: Self::Block) -> io::Result<()>;
+impl<Entry, LeafPage> RootBTreeIntermediatePage<UnicodePstFile, Entry, LeafPage>
+    for UnicodeBTreeEntryPage
+where
+    Entry: BTreeEntry<Key = u64> + BTreeEntryReadWrite,
+    LeafPage: RootBTreeLeafPage<UnicodePstFile, Entry = Entry>,
+{
+    type Entry = UnicodeBTreePageEntry;
+    type Page = UnicodeBTreeEntryPage;
+}
+
+impl<Entry, LeafPage> RootBTreeIntermediatePageReadWrite<UnicodePstFile, Entry, LeafPage>
+    for UnicodeBTreeEntryPage
+where
+    Entry: BTreeEntry<Key = u64> + BTreeEntryReadWrite,
+    LeafPage: RootBTreeLeafPage<UnicodePstFile, Entry = Entry>
+        + RootBTreeLeafPageReadWrite<UnicodePstFile>,
+{
+    fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self> {
+        <Self as UnicodeBTreePageReadWrite<UnicodeBTreePageEntry>>::read(f)
+    }
+
+    fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()> {
+        <Self as UnicodeBTreePageReadWrite<UnicodeBTreePageEntry>>::write(self, f)
+    }
+}
+
+impl<Entry, LeafPage> RootBTreeIntermediatePage<AnsiPstFile, Entry, LeafPage> for AnsiBTreeEntryPage
+where
+    Entry: BTreeEntry<Key = u32> + BTreeEntryReadWrite,
+    LeafPage: RootBTreeLeafPage<AnsiPstFile, Entry = Entry>,
+{
+    type Entry = AnsiBTreePageEntry;
+    type Page = AnsiBTreeEntryPage;
+}
+
+impl<Entry, LeafPage> RootBTreeIntermediatePageReadWrite<AnsiPstFile, Entry, LeafPage>
+    for AnsiBTreeEntryPage
+where
+    Entry: BTreeEntry<Key = u32> + BTreeEntryReadWrite,
+    LeafPage:
+        RootBTreeLeafPage<AnsiPstFile, Entry = Entry> + RootBTreeLeafPageReadWrite<AnsiPstFile>,
+{
+    fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self> {
+        <Self as AnsiBTreePageReadWrite<AnsiBTreePageEntry>>::read(f)
+    }
+
+    fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()> {
+        <Self as AnsiBTreePageReadWrite<AnsiBTreePageEntry>>::write(self, f)
+    }
+}
+
+pub trait RootBTreeLeafPage<Pst>
+where
+    Pst: PstFile,
+    Self: BTreePage<
+        Entry = <Self as RootBTreeLeafPage<Pst>>::Entry,
+        Trailer = <Pst as PstFile>::PageTrailer,
+    >,
+{
+    type Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey>;
+}
+
+impl RootBTreeLeafPage<UnicodePstFile> for UnicodeBlockBTreePage {
+    type Entry = UnicodeBlockBTreeEntry;
+}
+
+impl RootBTreeLeafPageReadWrite<UnicodePstFile> for UnicodeBlockBTreePage {
+    const BTREE_ENTRIES_SIZE: usize = UNICODE_BTREE_ENTRIES_SIZE;
+
+    fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self> {
+        <Self as UnicodeBTreePageReadWrite<UnicodeBlockBTreeEntry>>::read(f)
+    }
+
+    fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()> {
+        <Self as UnicodeBTreePageReadWrite<UnicodeBlockBTreeEntry>>::write(self, f)
+    }
+}
+
+impl RootBTreeLeafPage<AnsiPstFile> for AnsiBlockBTreePage {
+    type Entry = AnsiBlockBTreeEntry;
+}
+
+impl RootBTreeLeafPageReadWrite<AnsiPstFile> for AnsiBlockBTreePage {
+    const BTREE_ENTRIES_SIZE: usize = ANSI_BTREE_ENTRIES_SIZE;
+
+    fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self> {
+        <Self as AnsiBTreePageReadWrite<AnsiBlockBTreeEntry>>::read(f)
+    }
+
+    fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()> {
+        <Self as AnsiBTreePageReadWrite<AnsiBlockBTreeEntry>>::write(self, f)
+    }
+}
+
+impl RootBTreeLeafPage<UnicodePstFile> for UnicodeNodeBTreePage {
+    type Entry = UnicodeNodeBTreeEntry;
+}
+
+impl RootBTreeLeafPageReadWrite<UnicodePstFile> for UnicodeNodeBTreePage {
+    const BTREE_ENTRIES_SIZE: usize = UNICODE_BTREE_ENTRIES_SIZE;
+
+    fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self> {
+        <Self as UnicodeBTreePageReadWrite<UnicodeNodeBTreeEntry>>::read(f)
+    }
+
+    fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()> {
+        <Self as UnicodeBTreePageReadWrite<UnicodeNodeBTreeEntry>>::write(self, f)
+    }
+}
+
+impl RootBTreeLeafPage<AnsiPstFile> for AnsiNodeBTreePage {
+    type Entry = AnsiNodeBTreeEntry;
+}
+
+impl RootBTreeLeafPageReadWrite<AnsiPstFile> for AnsiNodeBTreePage {
+    const BTREE_ENTRIES_SIZE: usize = ANSI_BTREE_ENTRIES_SIZE;
+
+    fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self> {
+        <Self as AnsiBTreePageReadWrite<AnsiNodeBTreeEntry>>::read(f)
+    }
+
+    fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()> {
+        <Self as AnsiBTreePageReadWrite<AnsiNodeBTreeEntry>>::write(self, f)
+    }
+}
+
+pub trait RootBTree {
+    type Pst: PstFile<BTreeKey: BTreeEntryKey>;
+    type Entry: BTreeEntry<Key = <Self::Pst as PstFile>::BTreeKey> + Sized;
+    type IntermediatePage: RootBTreeIntermediatePage<Self::Pst, Self::Entry, Self::LeafPage>;
+    type LeafPage: RootBTreeLeafPage<Self::Pst, Entry = Self::Entry>;
+}
+
+pub enum RootBTreePage<Pst, Entry, IntermediatePage, LeafPage>
+where
+    Pst: PstFile,
+    Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey>,
+    IntermediatePage: RootBTreeIntermediatePage<Pst, Entry, LeafPage>,
+    LeafPage: RootBTreeLeafPage<Pst, Entry = Entry>,
+{
+    Intermediate(Box<IntermediatePage>, PhantomData<Pst>, PhantomData<Entry>),
+    Leaf(Box<LeafPage>),
+}
+
+impl<Pst, Entry, IntermediatePage, LeafPage> RootBTree
+    for RootBTreePage<Pst, Entry, IntermediatePage, LeafPage>
+where
+    Pst: PstFile,
+    Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey>,
+    IntermediatePage: RootBTreeIntermediatePage<Pst, Entry, LeafPage>,
+    LeafPage: RootBTreeLeafPage<Pst, Entry = Entry>,
+{
+    type Pst = Pst;
+    type Entry = Entry;
+    type IntermediatePage = IntermediatePage;
+    type LeafPage = LeafPage;
+}
+
+impl<Pst, Entry, IntermediatePage, LeafPage> RootBTreeReadWrite
+    for RootBTreePage<Pst, Entry, IntermediatePage, LeafPage>
+where
+    Pst: PstFile,
+    <Pst as PstFile>::BlockId: BlockIdReadWrite,
+    <Pst as PstFile>::ByteIndex: ByteIndexReadWrite,
+    <Pst as PstFile>::BlockRef: BlockRefReadWrite,
+    <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
+    <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite + Into<u64>,
+    Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey> + BTreeEntryReadWrite,
+    IntermediatePage: RootBTreeIntermediatePage<Pst, Entry, LeafPage>,
+    LeafPage: RootBTreeLeafPage<Pst, Entry = Entry>,
+    <Self as RootBTree>::Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey> + BTreeEntryReadWrite,
+    <Self as RootBTree>::IntermediatePage: RootBTreeIntermediatePageReadWrite<Pst, Entry, LeafPage>,
+    <Self as RootBTree>::LeafPage: RootBTreeLeafPageReadWrite<Pst>,
+{
+    fn read<R: Read + Seek>(f: &mut R, block: <Pst as PstFile>::BlockRef) -> io::Result<Self> {
+        f.seek(SeekFrom::Start(block.index().index().into()))?;
+
+        let mut buffer = [0_u8; PAGE_SIZE];
+        f.read_exact(&mut buffer)?;
+        let mut cursor = Cursor::new(buffer);
+
+        cursor.seek(SeekFrom::Start(LeafPage::BTREE_ENTRIES_SIZE as u64 + 3))?;
+        let level = cursor.read_u8()?;
+
+        cursor.seek(SeekFrom::Start(0))?;
+        Ok(if level == 0 {
+            Self::Leaf(Box::new(LeafPage::read(&mut cursor)?))
+        } else {
+            Self::Intermediate(
+                Box::new(IntermediatePage::read(&mut cursor)?),
+                PhantomData,
+                PhantomData,
+            )
+        })
+    }
+
+    fn write<W: Write + Seek>(
+        &self,
+        f: &mut W,
+        block: <Pst as PstFile>::BlockRef,
+    ) -> io::Result<()> {
+        f.seek(SeekFrom::Start(block.index().index().into()))?;
+
+        match self {
+            Self::Intermediate(page, ..) => page.write(f),
+            Self::Leaf(page) => page.write(f),
+        }
+    }
+
     fn find_entry<R: Read + Seek>(
         &self,
         f: &mut R,
-        key: <Self::Entry as BTreeEntry>::Key,
-    ) -> io::Result<Self::Entry>;
-}
-
-pub enum UnicodeBTree<LeafPage, Entry>
-where
-    LeafPage: UnicodeBTreePageReadWrite<Entry>,
-    Entry: BTreeEntryReadWrite,
-{
-    Intermediate(Box<UnicodeBTreeEntryPage>),
-    Leaf(Box<LeafPage>, PhantomData<Entry>),
-}
-
-impl<LeafPage, Entry> UnicodeBTree<LeafPage, Entry>
-where
-    LeafPage: UnicodeBTreePageReadWrite<Entry>,
-    Entry: BTreeEntryReadWrite + BTreeEntry<Key: PartialEq<u64>>,
-{
-}
-
-impl<LeafPage, Entry> RootBTree for UnicodeBTree<LeafPage, Entry>
-where
-    LeafPage: UnicodeBTreePageReadWrite<Entry>,
-    Entry: BTreeEntryReadWrite + BTreeEntry<Key = u64>,
-{
-    type Entry = Entry;
-    type Block = UnicodeBlockRef;
-    type Trailer = UnicodePageTrailer;
-    type IntermediateEntry = UnicodeBTreePageEntry;
-    type IntermediatePage = UnicodeBTreeEntryPage;
-    type LeafPage = LeafPage;
-
-    fn read<R: Read + Seek>(f: &mut R, block: UnicodeBlockRef) -> io::Result<Self> {
-        f.seek(SeekFrom::Start(block.index().index()))?;
-
-        let mut buffer = [0_u8; 512];
-        f.read_exact(&mut buffer)?;
-        let mut cursor = Cursor::new(buffer);
-
-        cursor.seek(SeekFrom::Start(UNICODE_BTREE_ENTRIES_SIZE as u64 + 3))?;
-        let level = cursor.read_u8()?;
-
-        cursor.seek(SeekFrom::Start(0))?;
-        Ok(if level == 0 {
-            UnicodeBTree::Leaf(Box::new(LeafPage::read(&mut cursor)?), PhantomData)
-        } else {
-            UnicodeBTree::Intermediate(Box::new(UnicodeBTreeEntryPage::read(&mut cursor)?))
-        })
-    }
-
-    fn write<W: Write + Seek>(&self, f: &mut W, block: UnicodeBlockRef) -> io::Result<()> {
-        f.seek(SeekFrom::Start(block.index().index()))?;
-
+        key: <Pst as PstFile>::BTreeKey,
+    ) -> io::Result<Entry> {
+        let search_key: u64 = key.into();
         match self {
-            UnicodeBTree::Intermediate(page) => page.write(f),
-            UnicodeBTree::Leaf(page, _) => page.write(f),
-        }
-    }
-
-    fn find_entry<R: Read + Seek>(&self, f: &mut R, key: u64) -> io::Result<Entry> {
-        match self {
-            UnicodeBTree::Intermediate(page) => {
-                let page = page
-                    .entries()
+            Self::Intermediate(page, ..) => {
+                let page = <Self::IntermediatePage as BTreePage>::entries(page)
                     .iter()
-                    .take_while(|entry| entry.key() <= key)
+                    .take_while(|entry| entry.key().into() <= search_key)
                     .last()
                     .map(|entry| entry.block())
-                    .ok_or(NdbError::UnicodeBTreePageNotFound(key))?;
-                let page = Self::read(f, page)?;
+                    .ok_or(NdbError::BTreePageNotFound(search_key))?;
+                let page = <Self as RootBTreeReadWrite>::read(f, page)?;
                 page.find_entry(f, key)
             }
-            UnicodeBTree::Leaf(page, _) => {
-                let entry = page
-                    .entries()
+            Self::Leaf(page) => {
+                let entry = <Self::LeafPage as BTreePage>::entries(page)
                     .iter()
-                    .find(|entry| entry.key() == key)
-                    .ok_or(NdbError::UnicodeBTreePageNotFound(key))?;
+                    .find(|entry| entry.key().into() == search_key)
+                    .ok_or(NdbError::BTreePageNotFound(search_key))?;
                 Ok(*entry)
             }
         }
     }
 }
 
-pub type UnicodeBlockBTree = UnicodeBTree<UnicodeBlockBTreePage, UnicodeBlockBTreeEntry>;
-pub type UnicodeNodeBTree = UnicodeBTree<UnicodeNodeBTreePage, UnicodeNodeBTreeEntry>;
-
-pub enum AnsiBTree<LeafPage, Entry>
+impl<Pst, Entry, IntermediatePage, LeafPage> RootBTreePage<Pst, Entry, IntermediatePage, LeafPage>
 where
-    LeafPage: AnsiBTreePageReadWrite<Entry>,
-    Entry: BTreeEntryReadWrite,
+    Pst: PstFile,
+    <Pst as PstFile>::BlockId: BlockIdReadWrite,
+    <Pst as PstFile>::ByteIndex: ByteIndexReadWrite,
+    <Pst as PstFile>::BlockRef: BlockRefReadWrite,
+    <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
+    <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite + Into<u64>,
+    Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey> + BTreeEntryReadWrite,
+    IntermediatePage: RootBTreeIntermediatePage<Pst, Entry, LeafPage>,
+    LeafPage: RootBTreeLeafPage<Pst, Entry = Entry>,
+    <Self as RootBTree>::Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey> + BTreeEntryReadWrite,
+    <Self as RootBTree>::IntermediatePage: RootBTreeIntermediatePageReadWrite<Pst, Entry, LeafPage>,
+    <Self as RootBTree>::LeafPage: RootBTreeLeafPageReadWrite<Pst>,
 {
-    Intermediate(Box<AnsiBTreeEntryPage>),
-    Leaf(Box<LeafPage>, PhantomData<Entry>),
-}
-
-impl<LeafPage, Entry> RootBTree for AnsiBTree<LeafPage, Entry>
-where
-    LeafPage: AnsiBTreePageReadWrite<Entry>,
-    Entry: BTreeEntryReadWrite + BTreeEntry<Key = u32>,
-{
-    type Entry = Entry;
-    type Block = AnsiBlockRef;
-    type Trailer = AnsiPageTrailer;
-    type IntermediateEntry = AnsiBTreePageEntry;
-    type IntermediatePage = AnsiBTreeEntryPage;
-    type LeafPage = LeafPage;
-
-    fn read<R: Read + Seek>(f: &mut R, block: AnsiBlockRef) -> io::Result<Self> {
-        f.seek(SeekFrom::Start(u64::from(block.index().index())))?;
-
-        let mut buffer = [0_u8; 512];
-        f.read_exact(&mut buffer)?;
-        let mut cursor = Cursor::new(buffer);
-
-        cursor.seek(SeekFrom::Start(ANSI_BTREE_ENTRIES_SIZE as u64 + 3))?;
-        let level = cursor.read_u8()?;
-
-        cursor.seek(SeekFrom::Start(0))?;
-        Ok(if level == 0 {
-            AnsiBTree::Leaf(Box::new(LeafPage::read(&mut cursor)?), PhantomData)
-        } else {
-            AnsiBTree::Intermediate(Box::new(AnsiBTreeEntryPage::read(&mut cursor)?))
-        })
+    pub fn read<R: Read + Seek>(f: &mut R, block: <Pst as PstFile>::BlockRef) -> io::Result<Self> {
+        <Self as RootBTreeReadWrite>::read(f, block)
     }
 
-    fn write<W: Write + Seek>(&self, f: &mut W, block: AnsiBlockRef) -> io::Result<()> {
-        f.seek(SeekFrom::Start(u64::from(block.index().index())))?;
-
-        match self {
-            AnsiBTree::Intermediate(page) => page.write(f),
-            AnsiBTree::Leaf(page, _) => page.write(f),
-        }
+    pub fn write<W: Write + Seek>(
+        &self,
+        f: &mut W,
+        block: <Pst as PstFile>::BlockRef,
+    ) -> io::Result<()> {
+        <Self as RootBTreeReadWrite>::write(self, f, block)
     }
 
-    fn find_entry<R: Read + Seek>(&self, f: &mut R, key: u32) -> io::Result<Entry> {
-        match self {
-            AnsiBTree::Intermediate(page) => {
-                let page = page
-                    .entries()
-                    .iter()
-                    .take_while(|entry| entry.key() <= key)
-                    .last()
-                    .map(|entry| entry.block())
-                    .ok_or(NdbError::AnsiBTreePageNotFound(key))?;
-                let page = Self::read(f, page)?;
-                page.find_entry(f, key)
-            }
-            AnsiBTree::Leaf(page, _) => {
-                let entry = page
-                    .entries()
-                    .iter()
-                    .find(|entry| entry.key() == key)
-                    .ok_or(NdbError::AnsiBTreePageNotFound(key))?;
-                Ok(*entry)
-            }
-        }
+    pub fn find_entry<R: Read + Seek>(
+        &self,
+        f: &mut R,
+        key: <Pst as PstFile>::BTreeKey,
+    ) -> io::Result<Entry> {
+        <Self as RootBTreeReadWrite>::find_entry(self, f, key)
     }
 }
 
-pub type AnsiBlockBTree = AnsiBTree<AnsiBlockBTreePage, AnsiBlockBTreeEntry>;
-pub type AnsiNodeBTree = AnsiBTree<AnsiNodeBTreePage, AnsiNodeBTreeEntry>;
+pub type UnicodeBTree<Entry, LeafPage> =
+    RootBTreePage<UnicodePstFile, Entry, UnicodeBTreeEntryPage, LeafPage>;
+
+pub type AnsiBTree<Entry, LeafPage> =
+    RootBTreePage<AnsiPstFile, Entry, AnsiBTreeEntryPage, LeafPage>;
+
+pub trait BlockBTree<Pst, Entry>: RootBTree<Pst = Pst, Entry = Entry>
+where
+    Pst: PstFile,
+    Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey>
+        + BlockBTreeEntry<Block = <Pst as PstFile>::BlockRef>,
+    <Self as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePage<Pst, Entry, <Self as RootBTree>::LeafPage>,
+    <Self as RootBTree>::LeafPage: RootBTreeLeafPage<Pst, Entry = <Self as RootBTree>::Entry>,
+{
+}
+
+pub type UnicodeBlockBTree = UnicodeBTree<UnicodeBlockBTreeEntry, UnicodeBlockBTreePage>;
+impl BlockBTree<UnicodePstFile, UnicodeBlockBTreeEntry> for UnicodeBlockBTree {}
+impl BlockBTreeReadWrite<UnicodePstFile, UnicodeBlockBTreeEntry> for UnicodeBlockBTree {}
+
+pub type AnsiBlockBTree = AnsiBTree<AnsiBlockBTreeEntry, AnsiBlockBTreePage>;
+impl BlockBTree<AnsiPstFile, AnsiBlockBTreeEntry> for AnsiBlockBTree {}
+impl BlockBTreeReadWrite<AnsiPstFile, AnsiBlockBTreeEntry> for AnsiBlockBTree {}
+
+pub trait NodeBTree<Pst, Entry>: RootBTree<Pst = Pst, Entry = Entry>
+where
+    Pst: PstFile,
+    Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey>
+        + NodeBTreeEntry<Block = <Pst as PstFile>::BlockId>,
+    <Self as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePage<Pst, Entry, <Self as RootBTree>::LeafPage>,
+    <Self as RootBTree>::LeafPage: RootBTreeLeafPage<Pst, Entry = <Self as RootBTree>::Entry>,
+{
+}
+
+pub type UnicodeNodeBTree = UnicodeBTree<UnicodeNodeBTreeEntry, UnicodeNodeBTreePage>;
+impl NodeBTree<UnicodePstFile, UnicodeNodeBTreeEntry> for UnicodeNodeBTree {}
+impl NodeBTreeReadWrite<UnicodePstFile, UnicodeNodeBTreeEntry> for UnicodeNodeBTree {}
+
+pub type AnsiNodeBTree = AnsiBTree<AnsiNodeBTreeEntry, AnsiNodeBTreePage>;
+impl NodeBTree<AnsiPstFile, AnsiNodeBTreeEntry> for AnsiNodeBTree {}
+impl NodeBTreeReadWrite<AnsiPstFile, AnsiNodeBTreeEntry> for AnsiNodeBTree {}

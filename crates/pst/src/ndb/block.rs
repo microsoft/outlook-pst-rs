@@ -482,14 +482,6 @@ impl From<AnsiDataTreeEntry> for AnsiBlockId {
 
 /// [XBLOCK](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/5b7a6935-e83d-4917-9f62-6ce3707f09e0)
 /// / [XXBLOCK](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/061b6ac4-d1da-468c-b75d-0303a0a8f468)
-pub trait DataTreeBlock<Entry, Trailer>:
-    IntermediateTreeBlock<Header = DataTreeBlockHeader, Entry = Entry, Trailer = Trailer>
-where
-    Entry: IntermediateTreeEntry,
-    Trailer: BlockTrailer,
-{
-}
-
 struct DataTreeBlockInner<Entry, Trailer>
 where
     Entry: IntermediateTreeEntry,

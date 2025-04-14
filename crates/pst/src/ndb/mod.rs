@@ -69,8 +69,6 @@ pub enum NdbError {
     UnexpectedPageType(PageType),
     #[error("Invalid PAGETRAILER dwCRC: 0x{0:08X}")]
     InvalidPageCrc(u32),
-    #[error("Invalid ANSI map page dwPadding: 0x{0:08X}")]
-    InvalidAnsiMapPagePadding(u32),
     #[error("Invalid DLISTPAGEENT dwPageNum: 0x{0:X}")]
     InvalidDensityListEntryPageNumber(u32),
     #[error("Invalid DLISTPAGEENT dwFreeSlots: 0x{0:04X}")]
@@ -90,9 +88,7 @@ pub enum NdbError {
     #[error("Invalid BTPAGE dwPadding: 0x{0:08X}")]
     InvalidBTreePagePadding(u32),
     #[error("BTENTRY not found: 0x{0:X}")]
-    UnicodeBTreePageNotFound(u64),
-    #[error("BTENTRY not found: 0x{0:X}")]
-    AnsiBTreePageNotFound(u32),
+    BTreePageNotFound(u64),
     #[error("Invalid NBTENTRY nid: 0x{0:X}")]
     InvalidNodeBTreeEntryNodeId(u64),
     #[error("Invalid BLOCKTRAILER cb: 0x{0:X}")]
@@ -117,6 +113,8 @@ pub enum NdbError {
     InvalidSubNodeBlockPadding(u32),
     #[error("Sub-node not found: {0:?}")]
     SubNodeNotFound(NodeId),
+    #[error("Invalid ANSI free space: 0x{0:016X}")]
+    InvalidAnsiFreeSpace(u64),
 }
 
 impl From<NdbError> for io::Error {

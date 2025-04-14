@@ -1,12 +1,13 @@
 use clap::Parser;
 use outlook_pst::{messaging::store::UnicodeStore, *};
+use std::rc::Rc;
 
 mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    let pst = UnicodePstFile::read(&args.file).unwrap();
-    let store = UnicodeStore::read(&pst).unwrap();
+    let pst = UnicodePstFile::open(&args.file).unwrap();
+    let store = UnicodeStore::read(Rc::new(pst)).unwrap();
     let hierarchy_table = store.root_hierarchy_table()?;
     let context = hierarchy_table.context();
 

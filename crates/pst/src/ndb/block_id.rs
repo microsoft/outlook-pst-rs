@@ -9,7 +9,7 @@ use std::{
 use super::{read_write::*, *};
 
 pub trait BlockId: Copy + Sized {
-    type Index: Copy + Sized;
+    type Index: Copy + Sized + From<Self> + Into<u64>;
 
     fn is_internal(&self) -> bool;
     fn index(&self) -> Self::Index;
@@ -79,7 +79,7 @@ impl From<u64> for UnicodeBlockId {
 
 impl From<UnicodeBlockId> for u64 {
     fn from(value: UnicodeBlockId) -> Self {
-        value.0
+        value.0 & !0x1
     }
 }
 
@@ -147,7 +147,7 @@ impl From<u32> for AnsiBlockId {
 
 impl From<AnsiBlockId> for u32 {
     fn from(value: AnsiBlockId) -> Self {
-        value.0
+        value.0 & !0x1
     }
 }
 

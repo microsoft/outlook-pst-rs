@@ -1,6 +1,6 @@
 //! ## [Folders](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/dee5b9d0-5513-4c5e-94aa-8bd28a9350b2)
 
-use std::{collections::BTreeMap, io};
+use std::{collections::BTreeMap, io, rc::Rc};
 
 use super::{store::*, *};
 use crate::{
@@ -16,11 +16,11 @@ use crate::{
         header::Header,
         node_id::{NodeId, NodeIdType},
         page::{
-            AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, RootBTree, UnicodeBlockBTree,
-            UnicodeNodeBTree,
+            AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, UnicodeBlockBTree, UnicodeNodeBTree,
         },
         root::Root,
     },
+    PstFile,
 };
 
 #[derive(Default, Debug)]
@@ -95,20 +95,20 @@ impl FolderProperties {
     }
 }
 
-pub struct UnicodeFolder<'a> {
-    store: &'a UnicodeStore<'a>,
+pub struct UnicodeFolder {
+    store: Rc<UnicodeStore>,
     properties: FolderProperties,
-    hierarchy_table: UnicodeTableContext,
-    contents_table: UnicodeTableContext,
-    associated_table: UnicodeTableContext,
+    hierarchy_table: Option<UnicodeTableContext>,
+    contents_table: Option<UnicodeTableContext>,
+    associated_table: Option<UnicodeTableContext>,
 }
 
-impl<'a> UnicodeFolder<'a> {
-    pub fn store(&self) -> &UnicodeStore {
-        self.store
+impl UnicodeFolder {
+    pub fn store(&self) -> &Rc<UnicodeStore> {
+        &self.store
     }
 
-    pub fn read(store: &'a UnicodeStore, entry_id: &EntryId) -> io::Result<Self> {
+    pub fn read(store: Rc<UnicodeStore>, entry_id: &EntryId) -> io::Result<Rc<Self>> {
         let node_id = entry_id.node_id();
         let node_id_type = node_id.id_type()?;
         match node_id_type {
@@ -127,7 +127,7 @@ impl<'a> UnicodeFolder<'a> {
 
         let (properties, hierarchy_table, contents_table, associated_table) = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -156,16 +156,43 @@ impl<'a> UnicodeFolder<'a> {
             let properties = FolderProperties { properties };
 
             let node_id = NodeId::new(NodeIdType::HierarchyTable, node_id.index())?;
-            let node = node_btree.find_entry(file, u64::from(u32::from(node_id)))?;
-            let hierarchy_table = UnicodeTableContext::read(file, encoding, &block_btree, node)?;
+            let hierarchy_table =
+                if let Ok(node) = node_btree.find_entry(file, u64::from(u32::from(node_id))) {
+                    Some(UnicodeTableContext::read(
+                        file,
+                        encoding,
+                        &block_btree,
+                        node,
+                    )?)
+                } else {
+                    None
+                };
 
             let node_id = NodeId::new(NodeIdType::ContentsTable, node_id.index())?;
-            let node = node_btree.find_entry(file, u64::from(u32::from(node_id)))?;
-            let contents_table = UnicodeTableContext::read(file, encoding, &block_btree, node)?;
+            let contents_table =
+                if let Ok(node) = node_btree.find_entry(file, u64::from(u32::from(node_id))) {
+                    Some(UnicodeTableContext::read(
+                        file,
+                        encoding,
+                        &block_btree,
+                        node,
+                    )?)
+                } else {
+                    None
+                };
 
             let node_id = NodeId::new(NodeIdType::AssociatedContentsTable, node_id.index())?;
-            let node = node_btree.find_entry(file, u64::from(u32::from(node_id)))?;
-            let associated_table = UnicodeTableContext::read(file, encoding, &block_btree, node)?;
+            let associated_table =
+                if let Ok(node) = node_btree.find_entry(file, u64::from(u32::from(node_id))) {
+                    Some(UnicodeTableContext::read(
+                        file,
+                        encoding,
+                        &block_btree,
+                        node,
+                    )?)
+                } else {
+                    None
+                };
 
             (
                 properties,
@@ -175,46 +202,46 @@ impl<'a> UnicodeFolder<'a> {
             )
         };
 
-        Ok(Self {
+        Ok(Rc::new(Self {
             store,
             properties,
             hierarchy_table,
             contents_table,
             associated_table,
-        })
+        }))
     }
 
     pub fn properties(&self) -> &FolderProperties {
         &self.properties
     }
 
-    pub fn hierarchy_table(&self) -> &UnicodeTableContext {
-        &self.hierarchy_table
+    pub fn hierarchy_table(&self) -> Option<&UnicodeTableContext> {
+        self.hierarchy_table.as_ref()
     }
 
-    pub fn contents_table(&self) -> &UnicodeTableContext {
-        &self.contents_table
+    pub fn contents_table(&self) -> Option<&UnicodeTableContext> {
+        self.contents_table.as_ref()
     }
 
-    pub fn associated_table(&self) -> &UnicodeTableContext {
-        &self.associated_table
+    pub fn associated_table(&self) -> Option<&UnicodeTableContext> {
+        self.associated_table.as_ref()
     }
 }
 
-pub struct AnsiFolder<'a> {
-    store: &'a AnsiStore<'a>,
+pub struct AnsiFolder {
+    store: Rc<AnsiStore>,
     properties: FolderProperties,
-    hierarchy_table: AnsiTableContext,
-    contents_table: AnsiTableContext,
-    associated_table: AnsiTableContext,
+    hierarchy_table: Option<AnsiTableContext>,
+    contents_table: Option<AnsiTableContext>,
+    associated_table: Option<AnsiTableContext>,
 }
 
-impl<'a> AnsiFolder<'a> {
-    pub fn store(&self) -> &AnsiStore {
-        self.store
+impl AnsiFolder {
+    pub fn store(&self) -> &Rc<AnsiStore> {
+        &self.store
     }
 
-    pub fn read(store: &'a AnsiStore, entry_id: &EntryId) -> io::Result<Self> {
+    pub fn read(store: Rc<AnsiStore>, entry_id: &EntryId) -> io::Result<Rc<Self>> {
         let node_id = entry_id.node_id();
         let node_id_type = node_id.id_type()?;
         match node_id_type {
@@ -233,7 +260,7 @@ impl<'a> AnsiFolder<'a> {
 
         let (properties, hierarchy_table, contents_table, associated_table) = {
             let mut file = pst
-                .file()
+                .reader()
                 .lock()
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
@@ -262,16 +289,27 @@ impl<'a> AnsiFolder<'a> {
             let properties = FolderProperties { properties };
 
             let node_id = NodeId::new(NodeIdType::HierarchyTable, node_id.index())?;
-            let node = node_btree.find_entry(file, u32::from(node_id))?;
-            let hierarchy_table = AnsiTableContext::read(file, encoding, &block_btree, node)?;
+            let hierarchy_table = if let Ok(node) = node_btree.find_entry(file, u32::from(node_id))
+            {
+                Some(AnsiTableContext::read(file, encoding, &block_btree, node)?)
+            } else {
+                None
+            };
 
             let node_id = NodeId::new(NodeIdType::ContentsTable, node_id.index())?;
-            let node = node_btree.find_entry(file, u32::from(node_id))?;
-            let contents_table = AnsiTableContext::read(file, encoding, &block_btree, node)?;
+            let contents_table = if let Ok(node) = node_btree.find_entry(file, u32::from(node_id)) {
+                Some(AnsiTableContext::read(file, encoding, &block_btree, node)?)
+            } else {
+                None
+            };
 
             let node_id = NodeId::new(NodeIdType::AssociatedContentsTable, node_id.index())?;
-            let node = node_btree.find_entry(file, u32::from(node_id))?;
-            let associated_table = AnsiTableContext::read(file, encoding, &block_btree, node)?;
+            let associated_table = if let Ok(node) = node_btree.find_entry(file, u32::from(node_id))
+            {
+                Some(AnsiTableContext::read(file, encoding, &block_btree, node)?)
+            } else {
+                None
+            };
 
             (
                 properties,
@@ -281,28 +319,28 @@ impl<'a> AnsiFolder<'a> {
             )
         };
 
-        Ok(Self {
+        Ok(Rc::new(Self {
             store,
             properties,
             hierarchy_table,
             contents_table,
             associated_table,
-        })
+        }))
     }
 
     pub fn properties(&self) -> &FolderProperties {
         &self.properties
     }
 
-    pub fn hierarchy_table(&self) -> &AnsiTableContext {
-        &self.hierarchy_table
+    pub fn hierarchy_table(&self) -> Option<&AnsiTableContext> {
+        self.hierarchy_table.as_ref()
     }
 
-    pub fn contents_table(&self) -> &AnsiTableContext {
-        &self.contents_table
+    pub fn contents_table(&self) -> Option<&AnsiTableContext> {
+        self.contents_table.as_ref()
     }
 
-    pub fn associated_table(&self) -> &AnsiTableContext {
-        &self.associated_table
+    pub fn associated_table(&self) -> Option<&AnsiTableContext> {
+        self.associated_table.as_ref()
     }
 }
