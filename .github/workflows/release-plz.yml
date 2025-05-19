@@ -23,7 +23,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Run release-plz
-        uses: MarcoIeni/release-plz-action@54c245148fec8cd76a8ecaa784681b8cb0b8bf8c
+        uses: MarcoIeni/release-plz-action@dde7b63054529c440305a924e5849c68318bcc9a
         with:
           command: release
         env:
