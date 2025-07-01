@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0](https://github.com/microsoft/outlook-pst-rs/compare/outlook-pst-v1.0.0...outlook-pst-v1.1.0) - 2025-07-01
+
+### Fixed
+- allow 0-size MV Properties
+
 ## [1.0.0](https://github.com/microsoft/outlook-pst-rs/compare/outlook-pst-v0.1.2...outlook-pst-v1.0.0) - 2025-04-11
 
 ### Added
