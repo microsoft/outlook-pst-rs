@@ -617,7 +617,7 @@ impl PropertyValueReadWrite for PropertyValue {
 
                     let mut buffer = if i < offsets.len() - 1 {
                         let next = offsets[i + 1];
-                        if next <= start {
+                        if next < start {
                             return Err(LtpError::InvalidMultiValuePropertyOffset(next).into());
                         }
 
@@ -663,7 +663,7 @@ impl PropertyValueReadWrite for PropertyValue {
                     let mut buffer = Vec::new();
                     if i < offsets.len() - 1 {
                         let next = offsets[i + 1];
-                        if next <= start {
+                        if next < start {
                             return Err(LtpError::InvalidMultiValuePropertyOffset(next).into());
                         }
 
@@ -739,7 +739,7 @@ impl PropertyValueReadWrite for PropertyValue {
 
                     let buffer = if i < offsets.len() - 1 {
                         let next = offsets[i + 1];
-                        if next <= start {
+                        if next < start {
                             return Err(LtpError::InvalidMultiValuePropertyOffset(next).into());
                         }
 
