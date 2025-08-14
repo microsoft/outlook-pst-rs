@@ -218,6 +218,16 @@ pub struct SearchUpdate {
     data: Option<SearchUpdateData>,
 }
 
+impl SearchUpdate {
+    pub fn flags(&self) -> u16 {
+        self.flags
+    }
+
+    pub fn data(&self) -> Option<&SearchUpdateData> {
+        self.data.as_ref()
+    }
+}
+
 impl SearchReadWrite for SearchUpdate {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let flags = f.read_u16::<LittleEndian>()?;

@@ -54,7 +54,7 @@ pub struct TableContextInfo {
     end_existence_bitmap: u16,
     row_index: HeapId,
     rows: Option<NodeId>,
-    deprecated_index: u32,
+    _deprecated_index: u32,
     columns: Vec<TableColumnDescriptor>,
 }
 
@@ -249,7 +249,7 @@ impl TableContextInfo {
             end_existence_bitmap,
             row_index,
             rows,
-            deprecated_index: 0,
+            _deprecated_index: 0,
             columns,
         })
     }
@@ -304,7 +304,7 @@ impl TableContextInfoReadWrite for TableContextInfo {
         };
 
         // hidIndex
-        let deprecated_index = f.read_u32::<LittleEndian>()?;
+        let _deprecated_index = f.read_u32::<LittleEndian>()?;
 
         // rgTCOLDESC
         let mut columns = Vec::with_capacity(usize::from(column_count));
@@ -313,7 +313,7 @@ impl TableContextInfoReadWrite for TableContextInfo {
         }
 
         Ok(Self {
-            deprecated_index,
+            _deprecated_index,
             ..Self::new(
                 end_4byte_values,
                 end_2byte_values,
@@ -350,7 +350,7 @@ impl TableContextInfoReadWrite for TableContextInfo {
         self.rows.unwrap_or_default().write(f)?;
 
         // hidIndex
-        f.write_u32::<LittleEndian>(self.deprecated_index)?;
+        f.write_u32::<LittleEndian>(self._deprecated_index)?;
 
         // rgTCOLDESC
         for column in &self.columns {

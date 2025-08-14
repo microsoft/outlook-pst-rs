@@ -8,7 +8,7 @@ compressed-rtf = { path = "crates/compressed-rtf" }
 [workspace.package]
 authors = ["Microsoft"]
 edition = "2021"
-rust-version = "1.76"
+rust-version = "1.82"
 repository = "https://github.com/microsoft/outlook-pst-rs"
 license = "MIT"
 keywords = ["win32", "outlook", "mapi"]

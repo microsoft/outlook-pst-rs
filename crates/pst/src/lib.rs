@@ -200,7 +200,7 @@ pub trait PstFile: Sized {
     fn header(&self) -> &Self::Header;
     fn density_list(&self) -> Result<&dyn DensityListPage<Self>, &io::Error>;
     fn reader(&self) -> &Mutex<Box<dyn PstReader>>;
-    fn lock(&mut self) -> io::Result<PstFileLockGuard<Self>>;
+    fn lock(&mut self) -> io::Result<PstFileLockGuard<'_, Self>>;
 
     fn read_node(&self, node: NodeId) -> io::Result<Self::NodeBTreeEntry>;
     fn read_block(&self, block: Self::BlockId) -> io::Result<Vec<u8>>;
@@ -300,7 +300,7 @@ impl PstFile for UnicodePstFile {
         &self.inner.reader
     }
 
-    fn lock(&mut self) -> io::Result<PstFileLockGuard<Self>> {
+    fn lock(&mut self) -> io::Result<PstFileLockGuard<'_, Self>> {
         PstFileLockGuard::new(self)
     }
 
@@ -395,7 +395,7 @@ impl PstFile for AnsiPstFile {
         &self.inner.reader
     }
 
-    fn lock(&mut self) -> io::Result<PstFileLockGuard<Self>> {
+    fn lock(&mut self) -> io::Result<PstFileLockGuard<'_, Self>> {
         PstFileLockGuard::new(self)
     }
 
