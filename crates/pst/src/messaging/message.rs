@@ -2,29 +2,25 @@
 
 use std::{collections::BTreeMap, io, rc::Rc};
 
-use super::{store::*, *};
+use super::{read_write::*, store::*, *};
 use crate::{
     ltp::{
-        heap::{AnsiHeapNode, UnicodeHeapNode},
-        prop_context::{AnsiPropertyContext, PropertyValue, UnicodePropertyContext},
+        heap::HeapNode,
+        prop_context::{PropertyContext, PropertyValue},
         prop_type::PropertyType,
-        table_context::{AnsiTableContext, UnicodeTableContext},
-        tree::{AnsiHeapTree, UnicodeHeapTree},
+        read_write::*,
+        table_context::TableContext,
     },
     ndb::{
-        block::{
-            AnsiDataTree, AnsiLeafSubNodeTreeEntry, AnsiSubNodeTree, UnicodeDataTree,
-            UnicodeLeafSubNodeTreeEntry, UnicodeSubNodeTree,
-        },
+        block::{IntermediateTreeBlock, LeafSubNodeTreeEntry, SubNodeTree},
+        block_id::BlockId,
         header::Header,
         node_id::{NodeId, NodeIdType},
-        page::{
-            AnsiBlockBTree, AnsiNodeBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, UnicodeBlockBTree,
-            UnicodeNodeBTree, UnicodeNodeBTreeEntry,
-        },
+        page::{AnsiNodeBTreeEntry, BTreePage, NodeBTreeEntry, RootBTree, UnicodeNodeBTreeEntry},
+        read_write::*,
         root::Root,
     },
-    PstFile,
+    AnsiPstFile, PstFile, PstFileLock, UnicodePstFile,
 };
 
 #[derive(Default, Debug)]
@@ -136,27 +132,69 @@ impl MessageProperties {
     }
 }
 
-pub type UnicodeMessageSubNodes = BTreeMap<NodeId, UnicodeLeafSubNodeTreeEntry>;
-pub type AnsiMessageSubNodes = BTreeMap<NodeId, AnsiLeafSubNodeTreeEntry>;
-
-pub struct UnicodeMessage {
-    store: Rc<UnicodeStore>,
-    properties: MessageProperties,
-    sub_nodes: UnicodeMessageSubNodes,
-    recipient_table: UnicodeTableContext,
-    attachment_table: Option<UnicodeTableContext>,
+pub trait Message {
+    fn store(&self) -> Rc<dyn Store>;
+    fn properties(&self) -> &MessageProperties;
+    fn recipient_table(&self) -> &Rc<dyn TableContext>;
+    fn attachment_table(&self) -> Option<&Rc<dyn TableContext>>;
 }
 
-impl UnicodeMessage {
-    pub fn store(&self) -> &Rc<UnicodeStore> {
-        &self.store
-    }
+struct MessageInner<Pst>
+where
+    Pst: PstFile,
+{
+    store: Rc<Pst::Store>,
+    properties: MessageProperties,
+    sub_nodes: MessageSubNodes<Pst>,
+    recipient_table: Rc<dyn TableContext>,
+    attachment_table: Option<Rc<dyn TableContext>>,
+}
 
-    pub fn read(
-        store: Rc<UnicodeStore>,
+impl<Pst> MessageInner<Pst>
+where
+    Pst: PstFile + PstFileLock<Pst>,
+    <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+    <Pst as PstFile>::NodeBTreeEntry: NodeBTreeEntryReadWrite,
+    <Pst as PstFile>::NodeBTree: RootBTreeReadWrite,
+    <<Pst as PstFile>::NodeBTree as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePageReadWrite<
+            Pst,
+            <Pst as PstFile>::NodeBTreeEntry,
+            <<Pst as PstFile>::NodeBTree as RootBTree>::LeafPage,
+        >,
+    <<<Pst as PstFile>::NodeBTree as RootBTree>::IntermediatePage as BTreePage>::Entry:
+        BTreePageEntryReadWrite,
+    <<Pst as PstFile>::NodeBTree as RootBTree>::LeafPage: RootBTreeLeafPageReadWrite<Pst>,
+    <Pst as PstFile>::BlockBTreeEntry: BlockBTreeEntryReadWrite,
+    <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePageReadWrite<
+            Pst,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+        >,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+        RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+    <Pst as PstFile>::BlockTrailer: BlockTrailerReadWrite,
+    <Pst as PstFile>::SubNodeTreeBlockHeader: IntermediateTreeHeaderReadWrite,
+    <Pst as PstFile>::SubNodeTreeBlock: IntermediateTreeBlockReadWrite,
+    <<Pst as PstFile>::SubNodeTreeBlock as IntermediateTreeBlock>::Entry:
+        IntermediateTreeEntryReadWrite,
+    <Pst as PstFile>::SubNodeBlock: IntermediateTreeBlockReadWrite,
+    <<Pst as PstFile>::SubNodeBlock as IntermediateTreeBlock>::Entry:
+        IntermediateTreeEntryReadWrite,
+    <Pst as PstFile>::HeapNode: HeapNodeReadWrite<Pst>,
+    <Pst as PstFile>::PropertyTree: HeapTreeReadWrite<Pst>,
+    <Pst as PstFile>::TableContext: TableContextReadWrite<Pst>,
+    <Pst as PstFile>::PropertyContext: PropertyContextReadWrite<Pst>,
+    <Pst as PstFile>::Store: StoreReadWrite<Pst>,
+{
+    fn read(
+        store: Rc<<Pst as PstFile>::Store>,
         entry_id: &EntryId,
         prop_ids: Option<&[u16]>,
-    ) -> io::Result<Rc<Self>> {
+    ) -> io::Result<Self> {
         let node_id = entry_id.node_id();
         let node_id_type = node_id.id_type()?;
         match node_id_type {
@@ -180,306 +218,262 @@ impl UnicodeMessage {
                 .map_err(|_| MessagingError::FailedToLockFile)?;
             let file = &mut *file;
 
-            let node_btree = UnicodeNodeBTree::read(file, *root.node_btree())?;
+            let node_btree = <<Pst as PstFile>::NodeBTree as RootBTreeReadWrite>::read(
+                file,
+                *root.node_btree(),
+            )?;
 
-            node_btree.find_entry(file, u64::from(u32::from(node_id)))?
+            let mut page_cache = pst.node_cache();
+            let node_key: <Pst as PstFile>::BTreeKey = u32::from(node_id).into();
+            node_btree.find_entry(file, node_key, &mut page_cache)?
         };
 
         Self::read_embedded(store, node, prop_ids)
     }
 
-    pub fn read_embedded(
+    fn read_embedded(
+        store: Rc<<Pst as PstFile>::Store>,
+        node: <Pst as PstFile>::NodeBTreeEntry,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Self> {
+        let pst = store.pst();
+        let header = pst.header();
+        let root = header.root();
+
+        let (properties, sub_nodes) = {
+            let mut file = pst
+                .reader()
+                .lock()
+                .map_err(|_| MessagingError::FailedToLockFile)?;
+            let file = &mut *file;
+
+            let encoding = header.crypt_method();
+            let block_btree = <<Pst as PstFile>::BlockBTree as RootBTreeReadWrite>::read(
+                file,
+                *root.block_btree(),
+            )?;
+
+            let sub_node = node
+                .sub_node()
+                .ok_or(MessagingError::MessageSubNodeTreeNotFound)?;
+
+            let mut page_cache = pst.block_cache();
+            let data = node.data();
+            let heap = <<Pst as PstFile>::HeapNode as HeapNodeReadWrite<Pst>>::read(
+                file,
+                &block_btree,
+                &mut page_cache,
+                encoding,
+                data.search_key(),
+            )?;
+            let header = heap.header()?;
+
+            let tree = <Pst as PstFile>::PropertyTree::new(heap, header.user_root());
+            let prop_context = <Pst as PstFile>::PropertyContext::new(node, tree);
+            let properties = prop_context
+                .properties()?
+                .into_iter()
+                .filter(|(prop_id, _)| prop_ids.is_none_or(|ids| ids.contains(prop_id)))
+                .map(|(prop_id, record)| {
+                    prop_context
+                        .read_property(file, encoding, &block_btree, &mut page_cache, record)
+                        .map(|value| (prop_id, value))
+                })
+                .collect::<io::Result<BTreeMap<_, _>>>()?;
+            let properties = MessageProperties { properties };
+
+            let block = block_btree.find_entry(file, sub_node.search_key(), &mut page_cache)?;
+            let sub_nodes = SubNodeTree::<Pst>::read(file, &block)?;
+            let sub_nodes: BTreeMap<_, _> = sub_nodes
+                .entries(file, &block_btree, &mut page_cache)?
+                .map(|entry| (entry.node(), entry))
+                .collect();
+
+            (properties, sub_nodes)
+        };
+
+        let mut recipient_table_nodes = sub_nodes.iter().filter_map(|(node_id, entry)| {
+            node_id.id_type().ok().and_then(|id_type| {
+                if id_type == NodeIdType::RecipientTable {
+                    Some(
+                        <<Pst as PstFile>::NodeBTreeEntry as NodeBTreeEntryReadWrite>::new(
+                            entry.node(),
+                            entry.block(),
+                            entry.sub_node(),
+                            None,
+                        ),
+                    )
+                } else {
+                    None
+                }
+            })
+        });
+        let recipient_table =
+            match (recipient_table_nodes.next(), recipient_table_nodes.next()) {
+                (None, None) => Err(MessagingError::MessageRecipientTableNotFound.into()),
+                (Some(node), None) => <<Pst as PstFile>::TableContext as TableContextReadWrite<
+                    Pst,
+                >>::read(store.clone(), node),
+                _ => Err(MessagingError::MultipleMessageRecipientTables.into()),
+            }?;
+
+        let mut attachment_table_nodes = sub_nodes.iter().filter_map(|(node_id, entry)| {
+            node_id.id_type().ok().and_then(|id_type| {
+                if id_type == NodeIdType::AttachmentTable {
+                    Some(
+                        <<Pst as PstFile>::NodeBTreeEntry as NodeBTreeEntryReadWrite>::new(
+                            entry.node(),
+                            entry.block(),
+                            entry.sub_node(),
+                            None,
+                        ),
+                    )
+                } else {
+                    None
+                }
+            })
+        });
+        let attachment_table = match (attachment_table_nodes.next(), attachment_table_nodes.next())
+        {
+            (None, None) => None,
+            (Some(node), None) => {
+                Some(<<Pst as PstFile>::TableContext as TableContextReadWrite<
+                    Pst,
+                >>::read(store.clone(), node)?)
+            }
+            _ => return Err(MessagingError::MultipleMessageAttachmentTables.into()),
+        };
+
+        Ok(Self {
+            store,
+            properties,
+            sub_nodes,
+            recipient_table,
+            attachment_table,
+        })
+    }
+}
+
+pub type MessageSubNodes<Pst> = BTreeMap<NodeId, LeafSubNodeTreeEntry<<Pst as PstFile>::BlockId>>;
+pub type UnicodeMessageSubNodes = MessageSubNodes<UnicodePstFile>;
+pub type AnsiMessageSubNodes = MessageSubNodes<AnsiPstFile>;
+
+pub struct UnicodeMessage {
+    inner: MessageInner<UnicodePstFile>,
+}
+
+impl UnicodeMessage {
+    pub fn read(
+        store: Rc<UnicodeStore>,
+        entry_id: &EntryId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<Self>> {
+        <Self as MessageReadWrite<UnicodePstFile>>::read(store, entry_id, prop_ids)
+    }
+}
+
+impl Message for UnicodeMessage {
+    fn store(&self) -> Rc<dyn Store> {
+        self.inner.store.clone()
+    }
+
+    fn properties(&self) -> &MessageProperties {
+        &self.inner.properties
+    }
+
+    fn recipient_table(&self) -> &Rc<dyn TableContext> {
+        &self.inner.recipient_table
+    }
+
+    fn attachment_table(&self) -> Option<&Rc<dyn TableContext>> {
+        self.inner.attachment_table.as_ref()
+    }
+}
+
+impl MessageReadWrite<UnicodePstFile> for UnicodeMessage {
+    fn read(
+        store: Rc<UnicodeStore>,
+        entry_id: &EntryId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<Self>> {
+        let inner = MessageInner::read(store, entry_id, prop_ids)?;
+        Ok(Rc::new(Self { inner }))
+    }
+
+    fn read_embedded(
         store: Rc<UnicodeStore>,
         node: UnicodeNodeBTreeEntry,
         prop_ids: Option<&[u16]>,
     ) -> io::Result<Rc<Self>> {
-        let pst = store.pst();
-        let header = pst.header();
-        let root = header.root();
-
-        let (properties, sub_nodes, recipient_table, attachment_table) = {
-            let mut file = pst
-                .reader()
-                .lock()
-                .map_err(|_| MessagingError::FailedToLockFile)?;
-            let file = &mut *file;
-
-            let encoding = header.crypt_method();
-            let block_btree = UnicodeBlockBTree::read(file, *root.block_btree())?;
-
-            let sub_node = node
-                .sub_node()
-                .ok_or(MessagingError::MessageSubNodeTreeNotFound)?;
-
-            let data = node.data();
-            let block = block_btree.find_entry(file, u64::from(data))?;
-            let heap = UnicodeHeapNode::new(UnicodeDataTree::read(file, encoding, &block)?);
-            let header = heap.header(file, encoding, &block_btree)?;
-
-            let tree = UnicodeHeapTree::new(heap, header.user_root());
-            let prop_context = UnicodePropertyContext::new(node, tree);
-            let properties = prop_context
-                .properties(file, encoding, &block_btree)?
-                .into_iter()
-                .filter(|(prop_id, _)| prop_ids.map_or(true, |ids| ids.contains(prop_id)))
-                .map(|(prop_id, record)| {
-                    prop_context
-                        .read_property(file, encoding, &block_btree, record)
-                        .map(|value| (prop_id, value))
-                })
-                .collect::<io::Result<BTreeMap<_, _>>>()?;
-            let properties = MessageProperties { properties };
-
-            let block = block_btree.find_entry(file, u64::from(sub_node))?;
-            let sub_nodes = UnicodeSubNodeTree::read(file, &block)?;
-            let sub_nodes: UnicodeMessageSubNodes = sub_nodes
-                .entries(file, &block_btree)?
-                .map(|entry| (entry.node(), entry))
-                .collect();
-
-            let mut recipient_table_nodes = sub_nodes.iter().filter_map(|(node_id, entry)| {
-                node_id.id_type().ok().and_then(|id_type| {
-                    if id_type == NodeIdType::RecipientTable {
-                        Some(UnicodeNodeBTreeEntry::new(
-                            entry.node(),
-                            entry.block(),
-                            entry.sub_node(),
-                            None,
-                        ))
-                    } else {
-                        None
-                    }
-                })
-            });
-            let recipient_table = match (recipient_table_nodes.next(), recipient_table_nodes.next())
-            {
-                (None, None) => Err(MessagingError::MessageRecipientTableNotFound.into()),
-                (Some(node), None) => UnicodeTableContext::read(file, encoding, &block_btree, node),
-                _ => Err(MessagingError::MultipleMessageRecipientTables.into()),
-            }?;
-
-            let mut attachment_table_nodes = sub_nodes.iter().filter_map(|(node_id, entry)| {
-                node_id.id_type().ok().and_then(|id_type| {
-                    if id_type == NodeIdType::AttachmentTable {
-                        Some(UnicodeNodeBTreeEntry::new(
-                            entry.node(),
-                            entry.block(),
-                            entry.sub_node(),
-                            None,
-                        ))
-                    } else {
-                        None
-                    }
-                })
-            });
-            let attachment_table =
-                match (attachment_table_nodes.next(), attachment_table_nodes.next()) {
-                    (None, None) => None,
-                    (Some(node), None) => Some(UnicodeTableContext::read(
-                        file,
-                        encoding,
-                        &block_btree,
-                        node,
-                    )?),
-                    _ => return Err(MessagingError::MultipleMessageAttachmentTables.into()),
-                };
-
-            (properties, sub_nodes, recipient_table, attachment_table)
-        };
-
-        Ok(Rc::new(Self {
-            store,
-            properties,
-            sub_nodes,
-            recipient_table,
-            attachment_table,
-        }))
+        let inner = MessageInner::read_embedded(store, node, prop_ids)?;
+        Ok(Rc::new(Self { inner }))
     }
 
-    pub fn properties(&self) -> &MessageProperties {
-        &self.properties
+    fn pst_store(&self) -> &Rc<UnicodeStore> {
+        &self.inner.store
     }
 
-    pub fn sub_nodes(&self) -> &UnicodeMessageSubNodes {
-        &self.sub_nodes
-    }
-
-    pub fn recipient_table(&self) -> &UnicodeTableContext {
-        &self.recipient_table
-    }
-
-    pub fn attachment_table(&self) -> Option<&UnicodeTableContext> {
-        self.attachment_table.as_ref()
+    fn sub_nodes(&self) -> &UnicodeMessageSubNodes {
+        &self.inner.sub_nodes
     }
 }
 
 pub struct AnsiMessage {
-    store: Rc<AnsiStore>,
-    properties: MessageProperties,
-    sub_nodes: AnsiMessageSubNodes,
-    recipient_table: AnsiTableContext,
-    attachment_table: Option<AnsiTableContext>,
+    inner: MessageInner<AnsiPstFile>,
 }
 
 impl AnsiMessage {
-    pub fn store(&self) -> &Rc<AnsiStore> {
-        &self.store
-    }
-
     pub fn read(
         store: Rc<AnsiStore>,
         entry_id: &EntryId,
         prop_ids: Option<&[u16]>,
     ) -> io::Result<Rc<Self>> {
-        let node_id = entry_id.node_id();
-        let node_id_type = node_id.id_type()?;
-        match node_id_type {
-            NodeIdType::NormalMessage | NodeIdType::AssociatedMessage | NodeIdType::Attachment => {}
-            _ => {
-                return Err(MessagingError::InvalidMessageEntryIdType(node_id_type).into());
-            }
-        }
-        if !store.properties().matches_record_key(entry_id)? {
-            return Err(MessagingError::EntryIdWrongStore.into());
-        }
+        <Self as MessageReadWrite<AnsiPstFile>>::read(store, entry_id, prop_ids)
+    }
+}
 
-        let pst = store.pst();
-        let header = pst.header();
-        let root = header.root();
-
-        let node = {
-            let mut file = pst
-                .reader()
-                .lock()
-                .map_err(|_| MessagingError::FailedToLockFile)?;
-            let file = &mut *file;
-
-            let node_btree = AnsiNodeBTree::read(file, *root.node_btree())?;
-
-            node_btree.find_entry(file, u32::from(node_id))?
-        };
-
-        Self::read_embedded(store, node, prop_ids)
+impl Message for AnsiMessage {
+    fn store(&self) -> Rc<dyn Store> {
+        self.inner.store.clone()
     }
 
-    pub fn read_embedded(
+    fn properties(&self) -> &MessageProperties {
+        &self.inner.properties
+    }
+
+    fn recipient_table(&self) -> &Rc<dyn TableContext> {
+        &self.inner.recipient_table
+    }
+
+    fn attachment_table(&self) -> Option<&Rc<dyn TableContext>> {
+        self.inner.attachment_table.as_ref()
+    }
+}
+
+impl MessageReadWrite<AnsiPstFile> for AnsiMessage {
+    fn read(
+        store: Rc<AnsiStore>,
+        entry_id: &EntryId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<Self>> {
+        let inner = MessageInner::read(store, entry_id, prop_ids)?;
+        Ok(Rc::new(Self { inner }))
+    }
+
+    fn read_embedded(
         store: Rc<AnsiStore>,
         node: AnsiNodeBTreeEntry,
         prop_ids: Option<&[u16]>,
     ) -> io::Result<Rc<Self>> {
-        let pst = store.pst();
-        let header = pst.header();
-        let root = header.root();
-
-        let (properties, sub_nodes, recipient_table, attachment_table) = {
-            let mut file = pst
-                .reader()
-                .lock()
-                .map_err(|_| MessagingError::FailedToLockFile)?;
-            let file = &mut *file;
-
-            let encoding = header.crypt_method();
-            let block_btree = AnsiBlockBTree::read(file, *root.block_btree())?;
-
-            let sub_node = node
-                .sub_node()
-                .ok_or(MessagingError::MessageSubNodeTreeNotFound)?;
-
-            let data = node.data();
-            let block = block_btree.find_entry(file, u32::from(data))?;
-            let heap = AnsiHeapNode::new(AnsiDataTree::read(file, encoding, &block)?);
-            let header = heap.header(file, encoding, &block_btree)?;
-
-            let tree = AnsiHeapTree::new(heap, header.user_root());
-            let prop_context = AnsiPropertyContext::new(node, tree);
-            let properties = prop_context
-                .properties(file, encoding, &block_btree)?
-                .into_iter()
-                .filter(|(prop_id, _)| prop_ids.map_or(true, |ids| ids.contains(prop_id)))
-                .map(|(prop_id, record)| {
-                    prop_context
-                        .read_property(file, encoding, &block_btree, record)
-                        .map(|value| (prop_id, value))
-                })
-                .collect::<io::Result<BTreeMap<_, _>>>()?;
-            let properties = MessageProperties { properties };
-
-            let block = block_btree.find_entry(file, u32::from(sub_node))?;
-            let sub_nodes = AnsiSubNodeTree::read(file, &block)?;
-            let sub_nodes: AnsiMessageSubNodes = sub_nodes
-                .entries(file, &block_btree)?
-                .map(|entry| (entry.node(), entry))
-                .collect();
-
-            let mut recipient_table_nodes = sub_nodes.iter().filter_map(|(node_id, entry)| {
-                node_id.id_type().ok().and_then(|id_type| {
-                    if id_type == NodeIdType::RecipientTable {
-                        Some(AnsiNodeBTreeEntry::new(
-                            entry.node(),
-                            entry.block(),
-                            entry.sub_node(),
-                            None,
-                        ))
-                    } else {
-                        None
-                    }
-                })
-            });
-            let recipient_table = match (recipient_table_nodes.next(), recipient_table_nodes.next())
-            {
-                (None, None) => Err(MessagingError::MessageRecipientTableNotFound.into()),
-                (Some(node), None) => AnsiTableContext::read(file, encoding, &block_btree, node),
-                _ => Err(MessagingError::MultipleMessageRecipientTables.into()),
-            }?;
-
-            let mut attachment_table_nodes = sub_nodes.iter().filter_map(|(node_id, entry)| {
-                node_id.id_type().ok().and_then(|id_type| {
-                    if id_type == NodeIdType::AttachmentTable {
-                        Some(AnsiNodeBTreeEntry::new(
-                            entry.node(),
-                            entry.block(),
-                            entry.sub_node(),
-                            None,
-                        ))
-                    } else {
-                        None
-                    }
-                })
-            });
-            let attachment_table =
-                match (attachment_table_nodes.next(), attachment_table_nodes.next()) {
-                    (None, None) => None,
-                    (Some(node), None) => {
-                        Some(AnsiTableContext::read(file, encoding, &block_btree, node)?)
-                    }
-                    _ => return Err(MessagingError::MultipleMessageAttachmentTables.into()),
-                };
-
-            (properties, sub_nodes, recipient_table, attachment_table)
-        };
-
-        Ok(Rc::new(Self {
-            store,
-            properties,
-            sub_nodes,
-            recipient_table,
-            attachment_table,
-        }))
+        let inner = MessageInner::read_embedded(store, node, prop_ids)?;
+        Ok(Rc::new(Self { inner }))
     }
 
-    pub fn properties(&self) -> &MessageProperties {
-        &self.properties
+    fn pst_store(&self) -> &Rc<AnsiStore> {
+        &self.inner.store
     }
 
-    pub fn sub_nodes(&self) -> &AnsiMessageSubNodes {
-        &self.sub_nodes
-    }
-
-    pub fn recipient_table(&self) -> &AnsiTableContext {
-        &self.recipient_table
-    }
-
-    pub fn attachment_table(&self) -> Option<&AnsiTableContext> {
-        self.attachment_table.as_ref()
+    fn sub_nodes(&self) -> &AnsiMessageSubNodes {
+        &self.inner.sub_nodes
     }
 }

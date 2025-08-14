@@ -1,24 +1,22 @@
 //! [Blocks](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/a9c1981d-d1ea-457c-b39e-dc7fb0eb95d4)
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
+use std::{
+    collections::{btree_map, BTreeMap, VecDeque},
+    io::{self, Cursor, Read, Seek, SeekFrom, Write},
+    iter,
+};
+use tracing::error;
 
 use super::{block_id::*, block_ref::*, byte_index::*, node_id::*, page::*, read_write::*, *};
+use crate::{AnsiPstFile, PstFile, PstFileReadWriteBlockBTree, PstReader, UnicodePstFile};
 
 pub const MAX_BLOCK_SIZE: u16 = 8192;
 
 pub const fn block_size(size: u16) -> u16 {
-    if size >= MAX_BLOCK_SIZE {
-        MAX_BLOCK_SIZE
-    } else {
-        let size = if size < 64 { 64 } else { size };
-        let tail = size % 64;
-        if tail == 0 {
-            size
-        } else {
-            size - tail + 64
-        }
-    }
+    assert!(size > 0);
+    assert!(size <= MAX_BLOCK_SIZE);
+    size.div_ceil(64) * 64
 }
 
 /// [BLOCKTRAILER](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/a14943ef-70c2-403f-898c-5bc3747117e1)
@@ -76,7 +74,7 @@ impl BlockTrailer for UnicodeBlockTrailer {
     }
 
     fn cyclic_key(&self) -> u32 {
-        u64::from(self.block_id) as u32
+        self.block_id.search_key() as u32
     }
 
     fn verify_block_id(&self, is_internal: bool) -> NdbResult<()> {
@@ -165,7 +163,7 @@ impl BlockTrailer for AnsiBlockTrailer {
     }
 
     fn cyclic_key(&self) -> u32 {
-        u32::from(self.block_id)
+        self.block_id.search_key()
     }
 
     fn verify_block_id(&self, is_internal: bool) -> NdbResult<()> {
@@ -233,8 +231,6 @@ impl UnicodeDataBlock {
         data: Vec<u8>,
         trailer: UnicodeBlockTrailer,
     ) -> NdbResult<Self> {
-        trailer.verify_block_id(false)?;
-
         Ok(Self {
             data,
             encoding,
@@ -288,8 +284,6 @@ impl AnsiDataBlock {
         data: Vec<u8>,
         trailer: AnsiBlockTrailer,
     ) -> NdbResult<Self> {
-        trailer.verify_block_id(false)?;
-
         Ok(Self {
             data,
             encoding,
@@ -402,20 +396,28 @@ impl IntermediateTreeHeaderReadWrite for DataTreeBlockHeader {
     }
 }
 
+pub trait IntermediateDataTreeEntry<Pst>: IntermediateTreeEntry
+where
+    Pst: PstFile,
+{
+    fn new(block: <Pst as PstFile>::BlockId) -> Self;
+    fn block(&self) -> <Pst as PstFile>::BlockId;
+}
+
 #[derive(Clone, Copy, Default)]
 pub struct UnicodeDataTreeEntry(UnicodeBlockId);
 
-impl UnicodeDataTreeEntry {
-    pub fn new(block: UnicodeBlockId) -> Self {
+impl IntermediateTreeEntry for UnicodeDataTreeEntry {}
+
+impl IntermediateDataTreeEntry<UnicodePstFile> for UnicodeDataTreeEntry {
+    fn new(block: UnicodeBlockId) -> Self {
         Self(block)
     }
 
-    pub fn block(&self) -> UnicodeBlockId {
+    fn block(&self) -> UnicodeBlockId {
         self.0
     }
 }
-
-impl IntermediateTreeEntry for UnicodeDataTreeEntry {}
 
 impl IntermediateTreeEntryReadWrite for UnicodeDataTreeEntry {
     const ENTRY_SIZE: u16 = 8;
@@ -444,17 +446,17 @@ impl From<UnicodeDataTreeEntry> for UnicodeBlockId {
 #[derive(Clone, Copy, Default)]
 pub struct AnsiDataTreeEntry(AnsiBlockId);
 
-impl AnsiDataTreeEntry {
-    pub fn new(block: AnsiBlockId) -> Self {
+impl IntermediateTreeEntry for AnsiDataTreeEntry {}
+
+impl IntermediateDataTreeEntry<AnsiPstFile> for AnsiDataTreeEntry {
+    fn new(block: AnsiBlockId) -> Self {
         Self(block)
     }
 
-    pub fn block(&self) -> AnsiBlockId {
+    fn block(&self) -> AnsiBlockId {
         self.0
     }
 }
-
-impl IntermediateTreeEntry for AnsiDataTreeEntry {}
 
 impl IntermediateTreeEntryReadWrite for AnsiDataTreeEntry {
     const ENTRY_SIZE: u16 = 4;
@@ -580,133 +582,417 @@ impl IntermediateTreeBlockReadWrite for AnsiDataTreeBlock {
     }
 }
 
-pub enum UnicodeDataTree {
-    Intermediate(Box<UnicodeDataTreeBlock>),
-    Leaf(Box<UnicodeDataBlock>),
+pub type DataBlockCache<Pst> = BTreeMap<<Pst as PstFile>::BlockId, DataTree<Pst>>;
+
+pub enum DataTree<Pst>
+where
+    Pst: PstFile,
+{
+    Intermediate(Box<<Pst as PstFile>::DataTreeBlock>),
+    Leaf(Box<<Pst as PstFile>::DataBlock>),
 }
 
-impl UnicodeDataTree {
-    pub fn read<R: Read + Seek>(
+impl<Pst> DataTree<Pst>
+where
+    Pst: PstFile,
+    <Pst as PstFile>::BlockTrailer: BlockTrailerReadWrite,
+    <Pst as PstFile>::DataTreeBlock: IntermediateTreeBlockReadWrite,
+    <<Pst as PstFile>::DataTreeBlock as IntermediateTreeBlock>::Entry:
+        IntermediateTreeEntryReadWrite,
+    <Pst as PstFile>::DataBlock: BlockReadWrite,
+{
+    pub fn read<R>(
         f: &mut R,
         encoding: NdbCryptMethod,
-        block: &UnicodeBlockBTreeEntry,
-    ) -> io::Result<Self> {
-        f.seek(SeekFrom::Start(block.block().index().index()))?;
+        block: &<Pst as PstFile>::BlockBTreeEntry,
+    ) -> io::Result<Self>
+    where
+        R: PstReader,
+    {
+        f.seek(SeekFrom::Start(block.block().index().index().into()))?;
 
-        let block_size = block_size(block.size() + UnicodeBlockTrailer::SIZE);
+        let block_size = block_size(
+            block.size() + <<Pst as PstFile>::BlockTrailer as BlockTrailerReadWrite>::SIZE,
+        );
         let mut data = vec![0; block_size as usize];
         f.read_exact(&mut data)?;
         let mut cursor = Cursor::new(data);
 
-        if block.block().block().is_internal() {
+        let block = if block.block().block().is_internal() {
             let header = DataTreeBlockHeader::read(&mut cursor)?;
             cursor.seek(SeekFrom::Start(0))?;
-            let block = UnicodeDataTreeBlock::read(&mut cursor, header, block.size())?;
-            Ok(UnicodeDataTree::Intermediate(Box::new(block)))
+            let block = <<Pst as PstFile>::DataTreeBlock as IntermediateTreeBlockReadWrite>::read(
+                &mut cursor,
+                header,
+                block.size(),
+            )?;
+            Self::Intermediate(Box::new(block))
         } else {
-            let block = UnicodeDataBlock::read(&mut cursor, block.size(), encoding)?;
-            Ok(UnicodeDataTree::Leaf(Box::new(block)))
-        }
+            let block = <<Pst as PstFile>::DataBlock as BlockReadWrite>::read(
+                &mut cursor,
+                block.size(),
+                encoding,
+            )?;
+            Self::Leaf(Box::new(block))
+        };
+
+        Ok(block)
     }
 
     pub fn write<W: Write + Seek>(
         &self,
         f: &mut W,
-        block: &UnicodeBlockBTreeEntry,
+        block: &<Pst as PstFile>::BlockBTreeEntry,
     ) -> io::Result<()> {
-        f.seek(SeekFrom::Start(block.block().index().index()))?;
+        f.seek(SeekFrom::Start(block.block().index().index().into()))?;
 
         match self {
-            UnicodeDataTree::Intermediate(block) => block.write(f),
-            UnicodeDataTree::Leaf(block) => block.write(f),
+            Self::Intermediate(block, ..) => block.write(f),
+            Self::Leaf(block) => block.write(f),
         }
     }
 
-    pub fn blocks<R: Read + Seek>(
+    pub fn blocks<'a, R>(
+        &'a self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_btree: &PstFileReadWriteBlockBTree<Pst>,
+        page_cache: &mut RootBTreePageCache<<Pst as PstFile>::BlockBTree>,
+        block_cache: &'a mut DataBlockCache<Pst>,
+    ) -> io::Result<Box<dyn 'a + Iterator<Item = <Pst as PstFile>::DataBlock>>>
+    where
+        R: PstReader,
+        <Pst as PstFile>::DataBlock: 'a + Clone,
+        <Pst as PstFile>::BlockId: BlockId<Index = <Pst as PstFile>::BTreeKey> + BlockIdReadWrite,
+        <Pst as PstFile>::ByteIndex: ByteIndexReadWrite,
+        <Pst as PstFile>::BlockRef: BlockRefReadWrite,
+        <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
+        <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+        <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+            RootBTreeIntermediatePageReadWrite<
+                Pst,
+                <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+                <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+            >,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+            RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+    {
+        match self {
+            Self::Intermediate(block, ..) => {
+                let mut blocks = Vec::with_capacity(block.entries().len());
+                for entry in block.entries() {
+                    let data_tree = match block_cache.remove(&entry.block()) {
+                        Some(entry) => entry,
+                        None => {
+                            let data_block = block_btree.find_entry(
+                                f,
+                                entry.block().search_key(),
+                                page_cache,
+                            )?;
+                            Self::read(&mut *f, encoding, &data_block)?
+                        }
+                    };
+                    let entries = data_tree
+                        .blocks(f, encoding, block_btree, page_cache, block_cache)
+                        .map(|blocks| blocks.collect::<Vec<_>>());
+                    block_cache.insert(entry.block(), data_tree);
+                    blocks.push(entries?);
+                }
+                Ok(Box::new(blocks.into_iter().flatten()))
+            }
+            Self::Leaf(block) => Ok(Box::new(Some(block.as_ref()).cloned().into_iter())),
+        }
+    }
+
+    pub fn nth<R>(
+        &self,
+        n: usize,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_btree: &PstFileReadWriteBlockBTree<Pst>,
+        page_cache: &mut RootBTreePageCache<<Pst as PstFile>::BlockBTree>,
+        block_cache: &mut DataBlockCache<Pst>,
+    ) -> io::Result<Option<Vec<u8>>>
+    where
+        R: PstReader,
+        <Pst as PstFile>::BlockId: BlockId<Index = <Pst as PstFile>::BTreeKey> + BlockIdReadWrite,
+        <Pst as PstFile>::ByteIndex: ByteIndexReadWrite,
+        <Pst as PstFile>::BlockRef: BlockRefReadWrite,
+        <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
+        <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+        <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+            RootBTreeIntermediatePageReadWrite<
+                Pst,
+                <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+                <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+            >,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+            RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+    {
+        Ok(Some(match self {
+            Self::Intermediate(_) => {
+                let Some(data_block) = self
+                    .sub_entries(f, encoding, block_btree, page_cache, block_cache)?
+                    .nth(n)
+                else {
+                    return Ok(None);
+                };
+
+                let data_tree = match block_cache.entry(data_block.block().block()) {
+                    btree_map::Entry::Vacant(entry) => {
+                        entry.insert(Self::read(&mut *f, encoding, &data_block)?)
+                    }
+                    btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                };
+
+                let Self::Leaf(block) = data_tree else {
+                    error!(
+                        name: "PstInvalidDataTreeIntermediateBlock",
+                        "Data tree intermediate block has non-leaf sub-entry"
+                    );
+
+                    return Err(NdbError::InvalidInternalBlockLevel(0).into());
+                };
+
+                block.data().to_vec()
+            }
+            Self::Leaf(block) => {
+                if n != 0 {
+                    return Ok(None);
+                }
+
+                block.data().to_vec()
+            }
+        }))
+    }
+
+    pub fn reader<'a, R>(
+        &self,
+        f: &'a mut R,
+        encoding: NdbCryptMethod,
+        block_btree: &'a PstFileReadWriteBlockBTree<Pst>,
+        page_cache: &mut RootBTreePageCache<<Pst as PstFile>::BlockBTree>,
+        block_cache: &'a mut DataBlockCache<Pst>,
+    ) -> io::Result<Box<dyn 'a + Read>>
+    where
+        Pst: 'a,
+        R: PstReader,
+        <Pst as PstFile>::DataBlock: 'a + Clone,
+        <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+        <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+            RootBTreeIntermediatePageReadWrite<
+                Pst,
+                <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+                <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+            >,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+            RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+    {
+        let reader: DataTreeReader<'a, Pst, R> =
+            DataTreeReader::new(self, f, encoding, block_btree, page_cache, block_cache)?;
+        let reader: Box<dyn 'a + Read> = Box::new(reader);
+        Ok(reader)
+    }
+
+    fn sub_entries<'a, R>(
         &self,
         f: &mut R,
         encoding: NdbCryptMethod,
-        block_btree: &UnicodeBlockBTree,
-    ) -> io::Result<Box<dyn Iterator<Item = UnicodeDataBlock>>> {
+        block_btree: &PstFileReadWriteBlockBTree<Pst>,
+        page_cache: &mut RootBTreePageCache<<Pst as PstFile>::BlockBTree>,
+        block_cache: &'a mut DataBlockCache<Pst>,
+    ) -> io::Result<Box<dyn 'a + Iterator<Item = <Pst as PstFile>::BlockBTreeEntry>>>
+    where
+        R: PstReader,
+        <Pst as PstFile>::BlockBTreeEntry: 'a,
+        <Pst as PstFile>::BlockId: BlockId<Index = <Pst as PstFile>::BTreeKey> + BlockIdReadWrite,
+        <Pst as PstFile>::ByteIndex: ByteIndexReadWrite,
+        <Pst as PstFile>::BlockRef: BlockRefReadWrite,
+        <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
+        <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+        <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+            RootBTreeIntermediatePageReadWrite<
+                Pst,
+                <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+                <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+            >,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+            RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+    {
         match self {
-            UnicodeDataTree::Intermediate(block) => {
-                let blocks = block
-                    .entries()
-                    .iter()
-                    .map(|entry| {
-                        let data_block = block_btree.find_entry(f, u64::from(entry.block()))?;
-                        let data_tree = UnicodeDataTree::read(&mut *f, encoding, &data_block)?;
-                        data_tree.blocks(f, encoding, block_btree)
-                    })
-                    .collect::<io::Result<Vec<_>>>()?;
+            Self::Intermediate(block, ..) => {
+                let mut blocks = Vec::with_capacity(block.entries().len());
+                for entry in block.entries() {
+                    if entry.block().is_internal() {
+                        let data_tree = match block_cache.remove(&entry.block()) {
+                            Some(entry) => entry,
+                            None => {
+                                let data_block = block_btree.find_entry(
+                                    f,
+                                    entry.block().search_key(),
+                                    page_cache,
+                                )?;
+                                Self::read(&mut *f, encoding, &data_block)?
+                            }
+                        };
+                        let entries = data_tree
+                            .sub_entries(f, encoding, block_btree, page_cache, block_cache)
+                            .map(|entries| entries.collect::<Vec<_>>());
+                        block_cache.insert(entry.block(), data_tree);
+                        blocks.push(entries?);
+                    } else {
+                        let data_block =
+                            block_btree.find_entry(f, entry.block().search_key(), page_cache)?;
+                        blocks.push(vec![data_block]);
+                    }
+                }
                 Ok(Box::new(blocks.into_iter().flatten()))
             }
-            UnicodeDataTree::Leaf(block) => Ok(Box::new(Some(block.as_ref()).cloned().into_iter())),
+            Self::Leaf(_) => Ok(Box::new(iter::empty())),
         }
     }
 }
 
-pub enum AnsiDataTree {
-    Intermediate(Box<AnsiDataTreeBlock>),
-    Leaf(Box<AnsiDataBlock>),
+struct DataTreeCursor<Pst>
+where
+    Pst: PstFile,
+{
+    current: Cursor<Vec<u8>>,
+    next: VecDeque<<Pst as PstFile>::BlockBTreeEntry>,
 }
 
-impl AnsiDataTree {
-    pub fn read<R: Read + Seek>(
-        f: &mut R,
+struct DataTreeReader<'a, Pst, R>
+where
+    Pst: PstFile,
+    R: PstReader,
+{
+    file: &'a mut R,
+    encoding: NdbCryptMethod,
+    cursor: DataTreeCursor<Pst>,
+}
+
+impl<'a, Pst, R> DataTreeReader<'a, Pst, R>
+where
+    Pst: PstFile,
+    R: PstReader,
+{
+    fn new(
+        data_tree: &DataTree<Pst>,
+        file: &'a mut R,
         encoding: NdbCryptMethod,
-        block: &AnsiBlockBTreeEntry,
-    ) -> io::Result<Self> {
-        f.seek(SeekFrom::Start(u64::from(block.block().index().index())))?;
+        block_btree: &'a PstFileReadWriteBlockBTree<Pst>,
+        page_cache: &mut RootBTreePageCache<<Pst as PstFile>::BlockBTree>,
+        block_cache: &'a mut DataBlockCache<Pst>,
+    ) -> io::Result<Self>
+    where
+        <Pst as PstFile>::BlockId: BlockId<Index = <Pst as PstFile>::BTreeKey> + BlockIdReadWrite,
+        <Pst as PstFile>::ByteIndex: ByteIndexReadWrite,
+        <Pst as PstFile>::BlockRef: BlockRefReadWrite,
+        <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
+        <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+        <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+            RootBTreeIntermediatePageReadWrite<
+                Pst,
+                <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+                <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+            >,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+            RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+        <Pst as PstFile>::BlockTrailer: BlockTrailerReadWrite,
+        <Pst as PstFile>::DataTreeBlock: IntermediateTreeBlockReadWrite,
+        <<Pst as PstFile>::DataTreeBlock as IntermediateTreeBlock>::Entry:
+            IntermediateTreeEntryReadWrite,
+        <Pst as PstFile>::DataBlock: BlockReadWrite,
+    {
+        let cursor = match data_tree {
+            DataTree::Intermediate(_) => {
+                let next = data_tree
+                    .sub_entries(file, encoding, block_btree, page_cache, block_cache)?
+                    .collect();
 
-        let block_size = block_size(block.size() + AnsiBlockTrailer::SIZE);
-        let mut data = vec![0; block_size as usize];
-        f.read_exact(&mut data)?;
-        let mut cursor = Cursor::new(data);
-
-        if block.block().block().is_internal() {
-            let header = DataTreeBlockHeader::read(&mut cursor)?;
-            cursor.seek(SeekFrom::Start(0))?;
-            let block = AnsiDataTreeBlock::read(&mut cursor, header, block.size())?;
-            Ok(AnsiDataTree::Intermediate(Box::new(block)))
-        } else {
-            let block = AnsiDataBlock::read(&mut cursor, block.size(), encoding)?;
-            Ok(AnsiDataTree::Leaf(Box::new(block)))
-        }
-    }
-
-    pub fn write<W: Write + Seek>(&self, f: &mut W, block: &AnsiBlockBTreeEntry) -> io::Result<()> {
-        f.seek(SeekFrom::Start(u64::from(block.block().index().index())))?;
-
-        match self {
-            AnsiDataTree::Intermediate(block) => block.write(f),
-            AnsiDataTree::Leaf(block) => block.write(f),
-        }
-    }
-
-    pub fn blocks<R: Read + Seek>(
-        &self,
-        f: &mut R,
-        encoding: NdbCryptMethod,
-        block_btree: &AnsiBlockBTree,
-    ) -> io::Result<Box<dyn Iterator<Item = AnsiDataBlock>>> {
-        match self {
-            AnsiDataTree::Intermediate(block) => {
-                let blocks = block
-                    .entries()
-                    .iter()
-                    .map(|entry| {
-                        let data_block = block_btree.find_entry(f, u32::from(entry.block()))?;
-                        let data_tree = AnsiDataTree::read(&mut *f, encoding, &data_block)?;
-                        data_tree.blocks(f, encoding, block_btree)
-                    })
-                    .collect::<io::Result<Vec<_>>>()?;
-                Ok(Box::new(blocks.into_iter().flatten()))
+                DataTreeCursor {
+                    current: Default::default(),
+                    next,
+                }
             }
-            AnsiDataTree::Leaf(block) => Ok(Box::new(Some(block.as_ref()).cloned().into_iter())),
-        }
+            DataTree::Leaf(block) => DataTreeCursor {
+                current: Cursor::new(block.data().to_vec()),
+                next: Default::default(),
+            },
+        };
+
+        Ok(Self {
+            cursor,
+            file,
+            encoding,
+        })
     }
 }
+
+impl<Pst, R> Read for DataTreeReader<'_, Pst, R>
+where
+    Pst: PstFile,
+    R: PstReader,
+    <Pst as PstFile>::BlockId: BlockId<Index = <Pst as PstFile>::BTreeKey> + BlockIdReadWrite,
+    <Pst as PstFile>::ByteIndex: ByteIndexReadWrite,
+    <Pst as PstFile>::BlockRef: BlockRefReadWrite,
+    <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
+    <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+    <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePageReadWrite<
+            Pst,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+        >,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+        RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+    <Pst as PstFile>::BlockTrailer: BlockTrailerReadWrite,
+    <Pst as PstFile>::DataTreeBlock: IntermediateTreeBlockReadWrite,
+    <<Pst as PstFile>::DataTreeBlock as IntermediateTreeBlock>::Entry:
+        IntermediateTreeEntryReadWrite,
+    <Pst as PstFile>::DataBlock: BlockReadWrite,
+{
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let mut total_read = self.cursor.current.read(buf)?;
+
+        while total_read < buf.len() {
+            let Some(next) = self.cursor.next.pop_front() else {
+                break;
+            };
+
+            let next: DataTree<Pst> = DataTree::read(self.file, self.encoding, &next)?;
+            let DataTree::Leaf(next) = next else {
+                error!(
+                    name: "PstInvalidDataTreeIntermediateBlock",
+                    "Data tree intermediate block has non-leaf sub-entry"
+                );
+
+                return Err(NdbError::InvalidInternalBlockLevel(0).into());
+            };
+            self.cursor.current = Cursor::new(next.data().to_vec());
+
+            let buf = &mut buf[total_read..];
+            total_read += self.cursor.current.read(buf)?;
+        }
+
+        Ok(total_read)
+    }
+}
+
+pub type UnicodeDataTree = DataTree<UnicodePstFile>;
+pub type AnsiDataTree = DataTree<AnsiPstFile>;
 
 #[derive(Clone, Copy, Default)]
 struct SubNodeTreeBlockHeader {
@@ -761,6 +1047,12 @@ impl IntermediateTreeHeaderReadWrite for UnicodeSubNodeTreeBlockHeader {
     }
 }
 
+impl SubNodeTreeBlockHeaderReadWrite for UnicodeSubNodeTreeBlockHeader {
+    fn new(level: u8, entry_count: u16) -> Self {
+        Self::new(level, entry_count)
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 pub struct AnsiSubNodeTreeBlockHeader(SubNodeTreeBlockHeader);
 
@@ -799,6 +1091,12 @@ impl IntermediateTreeHeaderReadWrite for AnsiSubNodeTreeBlockHeader {
         f.write_u8(0x02)?;
         f.write_u8(self.level())?;
         f.write_u16::<LittleEndian>(self.entry_count())
+    }
+}
+
+impl SubNodeTreeBlockHeaderReadWrite for AnsiSubNodeTreeBlockHeader {
+    fn new(level: u8, entry_count: u16) -> Self {
+        Self::new(level, entry_count)
     }
 }
 
@@ -847,7 +1145,7 @@ impl IntermediateTreeEntryReadWrite for UnicodeLeafSubNodeTreeEntry {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let inner = UnicodeIntermediateSubNodeTreeEntry::read(f)?;
         let sub_node = UnicodeBlockId::read(f)?;
-        let sub_node = if u64::from(sub_node) != 0 {
+        let sub_node = if sub_node.search_key() != 0 {
             Some(sub_node)
         } else {
             None
@@ -870,7 +1168,7 @@ impl IntermediateTreeEntryReadWrite for AnsiLeafSubNodeTreeEntry {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let inner = AnsiIntermediateSubNodeTreeEntry::read(f)?;
         let sub_node = AnsiBlockId::read(f)?;
-        let sub_node = if u32::from(sub_node) != 0 {
+        let sub_node = if sub_node.search_key() != 0 {
             Some(sub_node)
         } else {
             None
@@ -1033,64 +1331,114 @@ pub type UnicodeLeafSubNodeTreeBlock = SubNodeTreeBlock<
 pub type AnsiLeafSubNodeTreeBlock =
     SubNodeTreeBlock<AnsiSubNodeTreeBlockHeader, AnsiLeafSubNodeTreeEntry, AnsiBlockTrailer>;
 
-pub enum UnicodeSubNodeTree {
-    Intermediate(Box<UnicodeIntermediateSubNodeTreeBlock>),
-    Leaf(Box<UnicodeLeafSubNodeTreeBlock>),
+pub enum SubNodeTree<Pst>
+where
+    Pst: PstFile,
+{
+    Intermediate(Box<<Pst as PstFile>::SubNodeTreeBlock>),
+    Leaf(Box<<Pst as PstFile>::SubNodeBlock>),
 }
 
-impl UnicodeSubNodeTree {
-    pub fn read<R: Read + Seek>(f: &mut R, block: &UnicodeBlockBTreeEntry) -> io::Result<Self> {
-        f.seek(SeekFrom::Start(block.block().index().index()))?;
+impl<Pst> SubNodeTree<Pst>
+where
+    Pst: PstFile,
+    <Pst as PstFile>::BlockTrailer: BlockTrailerReadWrite,
+    <Pst as PstFile>::SubNodeTreeBlockHeader: IntermediateTreeHeaderReadWrite,
+    <Pst as PstFile>::SubNodeTreeBlock: IntermediateTreeBlockReadWrite,
+    <<Pst as PstFile>::SubNodeTreeBlock as IntermediateTreeBlock>::Entry:
+        IntermediateTreeEntryReadWrite,
+    <Pst as PstFile>::SubNodeBlock: IntermediateTreeBlockReadWrite,
+    <<Pst as PstFile>::SubNodeBlock as IntermediateTreeBlock>::Entry:
+        IntermediateTreeEntryReadWrite,
+{
+    pub fn read<R: PstReader>(
+        f: &mut R,
+        block: &<Pst as PstFile>::BlockBTreeEntry,
+    ) -> io::Result<Self> {
+        f.seek(SeekFrom::Start(block.block().index().index().into()))?;
 
-        let block_size = block_size(block.size() + UnicodeBlockTrailer::SIZE);
+        let block_size = block_size(
+            block.size() + <<Pst as PstFile>::BlockTrailer as BlockTrailerReadWrite>::SIZE,
+        );
         let mut data = vec![0; block_size as usize];
         f.read_exact(&mut data)?;
         let mut cursor = Cursor::new(data);
-        let header = UnicodeSubNodeTreeBlockHeader::read(&mut cursor)?;
+        let header =
+            <<Pst as PstFile>::SubNodeTreeBlockHeader as IntermediateTreeHeaderReadWrite>::read(
+                &mut cursor,
+            )?;
         cursor.seek(SeekFrom::Start(0))?;
 
         if header.level() > 0 {
             let block =
-                UnicodeIntermediateSubNodeTreeBlock::read(&mut cursor, header, block.size())?;
-            Ok(UnicodeSubNodeTree::Intermediate(Box::new(block)))
+                <<Pst as PstFile>::SubNodeTreeBlock as IntermediateTreeBlockReadWrite>::read(
+                    &mut cursor,
+                    header,
+                    block.size(),
+                )?;
+            Ok(Self::Intermediate(Box::new(block)))
         } else {
-            let block = UnicodeLeafSubNodeTreeBlock::read(&mut cursor, header, block.size())?;
-            Ok(UnicodeSubNodeTree::Leaf(Box::new(block)))
+            let block = <<Pst as PstFile>::SubNodeBlock as IntermediateTreeBlockReadWrite>::read(
+                &mut cursor,
+                header,
+                block.size(),
+            )?;
+            Ok(Self::Leaf(Box::new(block)))
         }
     }
 
     pub fn write<W: Write + Seek>(
         &self,
         f: &mut W,
-        block: &UnicodeBlockBTreeEntry,
+        block: &<Pst as PstFile>::BlockBTreeEntry,
     ) -> io::Result<()> {
-        f.seek(SeekFrom::Start(block.block().index().index()))?;
+        f.seek(SeekFrom::Start(block.block().index().index().into()))?;
 
         match self {
-            UnicodeSubNodeTree::Intermediate(block) => block.write(f),
-            UnicodeSubNodeTree::Leaf(block) => block.write(f),
+            Self::Intermediate(block) => block.write(f),
+            Self::Leaf(block) => block.write(f),
         }
     }
 
-    pub fn find_entry<R: Read + Seek>(
+    pub fn find_entry<R>(
         &self,
         f: &mut R,
-        block_btree: &UnicodeBlockBTree,
+        block_btree: &PstFileReadWriteBlockBTree<Pst>,
         node: NodeId,
-    ) -> io::Result<UnicodeBlockId> {
+        page_cache: &mut RootBTreePageCache<<Pst as PstFile>::BlockBTree>,
+    ) -> io::Result<<Pst as PstFile>::BlockId>
+    where
+        R: PstReader,
+        <Pst as PstFile>::BlockId: BlockId<Index = <Pst as PstFile>::BTreeKey> + BlockIdReadWrite,
+        <Pst as PstFile>::ByteIndex: ByteIndexReadWrite,
+        <Pst as PstFile>::BlockRef: BlockRefReadWrite,
+        <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
+        <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+        <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+            RootBTreeIntermediatePageReadWrite<
+                Pst,
+                <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+                <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+            >,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+            RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+    {
         match self {
-            UnicodeSubNodeTree::Intermediate(block) => {
-                let entry = block
-                    .entries()
-                    .iter()
-                    .take_while(|entry| u32::from(entry.node()) <= u32::from(node))
-                    .last()
+            Self::Intermediate(block) => {
+                let entries = block.entries();
+                let index =
+                    entries.partition_point(|entry| u32::from(entry.node()) <= u32::from(node));
+                let entry = index
+                    .checked_sub(1)
+                    .and_then(|index| entries.get(index))
                     .ok_or(NdbError::SubNodeNotFound(node))?;
-                let block = block_btree.find_entry(f, u64::from(entry.block()))?;
+                let block = block_btree.find_entry(f, entry.block().search_key(), page_cache)?;
                 let page = Self::read(f, &block)?;
-                page.find_entry(f, block_btree, node)
+                page.find_entry(f, block_btree, node, page_cache)
             }
-            UnicodeSubNodeTree::Leaf(block) => {
+            Self::Leaf(block) => {
                 let entry = block
                     .entries()
                     .iter()
@@ -1102,25 +1450,46 @@ impl UnicodeSubNodeTree {
         }
     }
 
-    pub fn entries<R: Read + Seek>(
+    pub fn entries<'a, R>(
         &self,
         f: &mut R,
-        block_btree: &UnicodeBlockBTree,
-    ) -> io::Result<Box<dyn Iterator<Item = UnicodeLeafSubNodeTreeEntry>>> {
+        block_btree: &PstFileReadWriteBlockBTree<Pst>,
+        page_cache: &mut RootBTreePageCache<<Pst as PstFile>::BlockBTree>,
+    ) -> io::Result<Box<dyn 'a + Iterator<Item = LeafSubNodeTreeEntry<<Pst as PstFile>::BlockId>>>>
+    where
+        R: PstReader,
+        <Pst as PstFile>::BlockId:
+            'a + BlockId<Index = <Pst as PstFile>::BTreeKey> + BlockIdReadWrite,
+        <Pst as PstFile>::ByteIndex: ByteIndexReadWrite,
+        <Pst as PstFile>::BlockRef: BlockRefReadWrite,
+        <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
+        <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+        <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+            RootBTreeIntermediatePageReadWrite<
+                Pst,
+                <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+                <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+            >,
+        <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+            RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+    {
         match self {
-            UnicodeSubNodeTree::Intermediate(block) => {
+            Self::Intermediate(block) => {
                 let entries = block
                     .entries()
                     .iter()
                     .map(|entry| {
-                        let block = block_btree.find_entry(f, u64::from(entry.block()))?;
-                        let sub_nodes = UnicodeSubNodeTree::read(f, &block)?;
-                        sub_nodes.entries(f, block_btree)
+                        let block =
+                            block_btree.find_entry(f, entry.block().search_key(), page_cache)?;
+                        let sub_nodes = Self::read(f, &block)?;
+                        sub_nodes.entries(f, block_btree, page_cache)
                     })
                     .collect::<io::Result<Vec<_>>>()?;
                 Ok(Box::new(entries.into_iter().flatten()))
             }
-            UnicodeSubNodeTree::Leaf(block) => {
+            Self::Leaf(block) => {
                 let entries = block.entries().to_vec();
                 Ok(Box::new(entries.into_iter()))
             }
@@ -1128,92 +1497,5 @@ impl UnicodeSubNodeTree {
     }
 }
 
-pub enum AnsiSubNodeTree {
-    Intermediate(Box<AnsiIntermediateSubNodeTreeBlock>),
-    Leaf(Box<AnsiLeafSubNodeTreeBlock>),
-}
-
-impl AnsiSubNodeTree {
-    pub fn read<R: Read + Seek>(f: &mut R, block: &AnsiBlockBTreeEntry) -> io::Result<Self> {
-        f.seek(SeekFrom::Start(u64::from(block.block().index().index())))?;
-
-        let block_size = block_size(block.size() + AnsiBlockTrailer::SIZE);
-        let mut data = vec![0; block_size as usize];
-        f.read_exact(&mut data)?;
-        let mut cursor = Cursor::new(data);
-        let header = AnsiSubNodeTreeBlockHeader::read(&mut cursor)?;
-        cursor.seek(SeekFrom::Start(0))?;
-
-        if header.level() > 0 {
-            let block = AnsiIntermediateSubNodeTreeBlock::read(&mut cursor, header, block.size())?;
-            Ok(AnsiSubNodeTree::Intermediate(Box::new(block)))
-        } else {
-            let block = AnsiLeafSubNodeTreeBlock::read(&mut cursor, header, block.size())?;
-            Ok(AnsiSubNodeTree::Leaf(Box::new(block)))
-        }
-    }
-
-    pub fn write<W: Write + Seek>(&self, f: &mut W, block: &AnsiBlockBTreeEntry) -> io::Result<()> {
-        f.seek(SeekFrom::Start(u64::from(block.block().index().index())))?;
-
-        match self {
-            AnsiSubNodeTree::Intermediate(block) => block.write(f),
-            AnsiSubNodeTree::Leaf(block) => block.write(f),
-        }
-    }
-
-    pub fn find_entry<R: Read + Seek>(
-        &self,
-        f: &mut R,
-        block_btree: &AnsiBlockBTree,
-        node: NodeId,
-    ) -> io::Result<AnsiBlockId> {
-        match self {
-            AnsiSubNodeTree::Intermediate(block) => {
-                let entry = block
-                    .entries()
-                    .iter()
-                    .take_while(|entry| u32::from(entry.node()) <= u32::from(node))
-                    .last()
-                    .ok_or(NdbError::SubNodeNotFound(node))?;
-                let block = block_btree.find_entry(f, u32::from(entry.block()))?;
-                let page = Self::read(f, &block)?;
-                page.find_entry(f, block_btree, node)
-            }
-            AnsiSubNodeTree::Leaf(block) => {
-                let entry = block
-                    .entries()
-                    .iter()
-                    .find(|entry| u32::from(entry.node()) == u32::from(node))
-                    .map(|entry| entry.block())
-                    .ok_or(NdbError::SubNodeNotFound(node))?;
-                Ok(entry)
-            }
-        }
-    }
-
-    pub fn entries<R: Read + Seek>(
-        &self,
-        f: &mut R,
-        block_btree: &AnsiBlockBTree,
-    ) -> io::Result<Box<dyn Iterator<Item = AnsiLeafSubNodeTreeEntry>>> {
-        match self {
-            AnsiSubNodeTree::Intermediate(block) => {
-                let entries = block
-                    .entries()
-                    .iter()
-                    .map(|entry| {
-                        let block = block_btree.find_entry(f, u32::from(entry.block()))?;
-                        let sub_nodes = AnsiSubNodeTree::read(f, &block)?;
-                        sub_nodes.entries(f, block_btree)
-                    })
-                    .collect::<io::Result<Vec<_>>>()?;
-                Ok(Box::new(entries.into_iter().flatten()))
-            }
-            AnsiSubNodeTree::Leaf(block) => {
-                let entries = block.entries().to_vec();
-                Ok(Box::new(entries.into_iter()))
-            }
-        }
-    }
-}
+pub type UnicodeSubNodeTree = SubNodeTree<UnicodePstFile>;
+pub type AnsiSubNodeTree = SubNodeTree<AnsiPstFile>;

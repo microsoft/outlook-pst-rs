@@ -1,25 +1,13 @@
 use clap::Parser;
-use outlook_pst::{
-    ltp::prop_type::PropertyType,
-    messaging::store::{AnsiStore, StoreProperties, UnicodeStore},
-    *,
-};
-use std::rc::Rc;
+use outlook_pst::{ltp::prop_type::PropertyType, messaging::store::StoreProperties};
 
 mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    if let Ok(pst) = UnicodePstFile::open(&args.file) {
-        let store = UnicodeStore::read(Rc::new(pst)).unwrap();
-        let properties = store.properties();
-        read_store_props(properties)
-    } else {
-        let pst = AnsiPstFile::open(&args.file)?;
-        let store = AnsiStore::read(Rc::new(pst))?;
-        let properties = store.properties();
-        read_store_props(properties)
-    }
+    let store = outlook_pst::open_store(&args.file)?;
+    let properties = store.properties();
+    read_store_props(properties)
 }
 
 fn read_store_props(properties: &StoreProperties) -> anyhow::Result<()> {
@@ -36,7 +24,7 @@ fn read_store_props(properties: &StoreProperties) -> anyhow::Result<()> {
             " Property ID: 0x{prop_id:04X}, Type: {:?}",
             PropertyType::from(value)
         );
-        println!("  Value: {:?}", value);
+        println!("  Value: {value:?}");
     }
 
     Ok(())

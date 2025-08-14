@@ -1,8 +1,11 @@
 #![allow(dead_code)]
 
 use std::{
+    cell::RefCell,
     cmp::Ordering,
+    collections::BTreeMap,
     io::{self, Cursor, Read, Seek, SeekFrom, Write},
+    rc::Rc,
 };
 
 use super::{
@@ -11,7 +14,7 @@ use super::{
 use crate::{
     crc::compute_crc,
     encode::{cyclic, permute},
-    PstFile,
+    PstFile, PstReader,
 };
 
 pub trait NodeIdReadWrite: Copy + Sized {
@@ -20,18 +23,18 @@ pub trait NodeIdReadWrite: Copy + Sized {
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
 }
 
-pub trait BlockIdReadWrite: BlockId + Copy + Sized {
+pub trait BlockIdReadWrite: BlockId {
     fn read(f: &mut dyn Read) -> io::Result<Self>;
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
 }
 
-pub trait ByteIndexReadWrite: ByteIndex + Copy + Sized {
+pub trait ByteIndexReadWrite: ByteIndex {
     fn new(index: Self::Index) -> Self;
     fn read(f: &mut dyn Read) -> io::Result<Self>;
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
 }
 
-pub trait BlockRefReadWrite: BlockRef + Copy + Sized
+pub trait BlockRefReadWrite: BlockRef
 where
     <Self as BlockRef>::Block: BlockIdReadWrite,
     <Self as BlockRef>::Index: ByteIndexReadWrite,
@@ -54,15 +57,15 @@ pub trait RootReadWrite<Pst>: Root<Pst> + Sized
 where
     Pst: PstFile,
     <Pst as PstFile>::ByteIndex: ByteIndexReadWrite,
-    <Pst as PstFile>::BlockRef: BlockRefReadWrite,
+    <Pst as PstFile>::PageRef: BlockRefReadWrite,
 {
     fn new(
         file_eof_index: <Pst as PstFile>::ByteIndex,
         amap_last_index: <Pst as PstFile>::ByteIndex,
         amap_free_size: <Pst as PstFile>::ByteIndex,
         pmap_free_size: <Pst as PstFile>::ByteIndex,
-        node_btree: <Pst as PstFile>::BlockRef,
-        block_btree: <Pst as PstFile>::BlockRef,
+        node_btree: <Pst as PstFile>::PageRef,
+        block_btree: <Pst as PstFile>::PageRef,
         amap_is_valid: AmapStatus,
     ) -> Self;
 
@@ -78,8 +81,8 @@ where
         let amap_last_index = <<Pst as PstFile>::ByteIndex as ByteIndexReadWrite>::read(f)?;
         let amap_free_size = <<Pst as PstFile>::ByteIndex as ByteIndexReadWrite>::read(f)?;
         let pmap_free_size = <<Pst as PstFile>::ByteIndex as ByteIndexReadWrite>::read(f)?;
-        let node_btree = <<Pst as PstFile>::BlockRef as BlockRefReadWrite>::read(f)?;
-        let block_btree = <<Pst as PstFile>::BlockRef as BlockRefReadWrite>::read(f)?;
+        let node_btree = <<Pst as PstFile>::PageRef as BlockRefReadWrite>::read(f)?;
+        let block_btree = <<Pst as PstFile>::PageRef as BlockRefReadWrite>::read(f)?;
         let amap_is_valid = AmapStatus::try_from(f.read_u8()?).unwrap_or(AmapStatus::Invalid);
         let reserved2 = f.read_u8()?;
         let reserved3 = f.read_u16::<LittleEndian>()?;
@@ -110,7 +113,7 @@ where
     }
 
     fn set_amap_status(&mut self, status: AmapStatus);
-    fn reset_free_size(&mut self, free_bytes: u64) -> NdbResult<()>;
+    fn reset_free_size(&mut self, free_bytes: <Pst as PstFile>::ByteIndex) -> NdbResult<()>;
 }
 
 pub trait HeaderReadWrite<Pst>: Header<Pst> + Sized
@@ -122,6 +125,7 @@ where
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
     fn update_unique(&mut self);
     fn first_free_map(&mut self) -> &mut [u8];
+    fn first_free_page_map(&mut self) -> &mut [u8];
 }
 
 pub trait PageTrailerReadWrite: PageTrailer + Copy + Sized {
@@ -244,13 +248,15 @@ pub trait DensityListPageReadWrite<Pst>: DensityListPage<Pst> + Sized
 where
     Pst: PstFile,
 {
+    const MAX_ENTRIES: usize;
+
     fn new(
         backfill_complete: bool,
         current_page: u32,
         entries: &[DensityListPageEntry],
         trailer: <Pst as PstFile>::PageTrailer,
     ) -> NdbResult<Self>;
-    fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self>;
+    fn read<R: PstReader>(f: &mut R) -> io::Result<Self>;
     fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()>;
 }
 
@@ -561,7 +567,7 @@ where
 {
     fn new(encoding: NdbCryptMethod, data: Vec<u8>, trailer: Self::Trailer) -> NdbResult<Self>;
 
-    fn read<R: Read + Seek>(f: &mut R, size: u16, encoding: NdbCryptMethod) -> io::Result<Self> {
+    fn read<R: PstReader>(f: &mut R, size: u16, encoding: NdbCryptMethod) -> io::Result<Self> {
         let mut data = vec![0; size as usize];
         f.read_exact(&mut data)?;
 
@@ -638,6 +644,10 @@ pub trait IntermediateTreeHeaderReadWrite: IntermediateTreeHeader + Copy + Sized
     fn write(&self, f: &mut dyn Write) -> io::Result<()>;
 }
 
+pub trait SubNodeTreeBlockHeaderReadWrite: IntermediateTreeHeaderReadWrite {
+    fn new(level: u8, entry_count: u16) -> Self;
+}
+
 pub trait IntermediateTreeEntryReadWrite: IntermediateTreeEntry + Copy + Sized {
     const ENTRY_SIZE: u16;
 
@@ -657,7 +667,7 @@ where
         trailer: Self::Trailer,
     ) -> NdbResult<Self>;
 
-    fn read<R: Read + Seek>(f: &mut R, header: Self::Header, size: u16) -> io::Result<Self> {
+    fn read<R: PstReader>(f: &mut R, header: Self::Header, size: u16) -> io::Result<Self> {
         let mut data = vec![0; size as usize];
         f.read_exact(&mut data)?;
         let mut cursor = Cursor::new(&data[Self::Header::HEADER_SIZE as usize..]);
@@ -733,6 +743,12 @@ type RootBTreePageReadWrite<BTree> = RootBTreePage<
     <BTree as RootBTree>::LeafPage,
 >;
 
+pub type RootBTreePageCache<BTree> =
+    BTreeMap<<<BTree as RootBTree>::Pst as PstFile>::PageId, RootBTreePageReadWrite<BTree>>;
+
+pub type BlockBTreePageCache<Pst> = Rc<RefCell<RootBTreePageCache<<Pst as PstFile>::BlockBTree>>>;
+pub type NodeBTreePageCache<Pst> = Rc<RefCell<RootBTreePageCache<<Pst as PstFile>::NodeBTree>>>;
+
 pub trait RootBTreeReadWrite: RootBTree + Sized
 where
     <<Self as RootBTree>::Pst as PstFile>::BlockId: BlockIdReadWrite,
@@ -749,19 +765,20 @@ where
     <Self as RootBTree>::LeafPage:
         RootBTreeLeafPageReadWrite<<Self as RootBTree>::Pst> + BTreePageReadWrite,
 {
-    fn read<R: Read + Seek>(
+    fn read<R: PstReader>(
         f: &mut R,
-        block: <<Self as RootBTree>::Pst as PstFile>::BlockRef,
+        block: <<Self as RootBTree>::Pst as PstFile>::PageRef,
     ) -> io::Result<RootBTreePageReadWrite<Self>>;
     fn write<W: Write + Seek>(
         &self,
         f: &mut W,
-        block: <<Self as RootBTree>::Pst as PstFile>::BlockRef,
+        block: <<Self as RootBTree>::Pst as PstFile>::PageRef,
     ) -> io::Result<()>;
-    fn find_entry<R: Read + Seek>(
+    fn find_entry<R: PstReader>(
         &self,
         f: &mut R,
         key: <<Self as RootBTree>::Pst as PstFile>::BTreeKey,
+        page_cache: &mut RootBTreePageCache<Self>,
     ) -> io::Result<<Self as RootBTree>::Entry>;
 }
 
@@ -777,7 +794,7 @@ where
     Entry: BTreeEntry<Key = <Pst as PstFile>::BTreeKey> + BTreeEntryReadWrite,
     LeafPage: RootBTreeLeafPage<Pst, Entry = Entry> + RootBTreeLeafPageReadWrite<Pst>,
 {
-    fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self>;
+    fn read<R: PstReader>(f: &mut R) -> io::Result<Self>;
     fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()>;
 }
 
@@ -793,7 +810,7 @@ where
 {
     const BTREE_ENTRIES_SIZE: usize;
 
-    fn read<R: Read + Seek>(f: &mut R) -> io::Result<Self>;
+    fn read<R: PstReader>(f: &mut R) -> io::Result<Self>;
     fn write<W: Write + Seek>(&self, f: &mut W) -> io::Result<()>;
 }
 

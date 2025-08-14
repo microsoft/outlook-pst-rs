@@ -2,7 +2,7 @@
 
 use super::{block_id::*, byte_index::*, read_write::*};
 
-pub trait BlockRef {
+pub trait BlockRef: Copy + Default + Sized {
     type Block: BlockId;
     type Index: ByteIndex;
 
@@ -42,6 +42,37 @@ impl BlockRefReadWrite for UnicodeBlockRef {
 }
 
 #[derive(Clone, Copy, Default, Debug)]
+pub struct UnicodePageRef {
+    page: UnicodePageId,
+    index: UnicodeByteIndex,
+}
+
+impl UnicodePageRef {
+    pub fn new(page: UnicodePageId, index: UnicodeByteIndex) -> Self {
+        Self { page, index }
+    }
+}
+
+impl BlockRef for UnicodePageRef {
+    type Block = UnicodePageId;
+    type Index = UnicodeByteIndex;
+
+    fn block(&self) -> UnicodePageId {
+        self.page
+    }
+
+    fn index(&self) -> UnicodeByteIndex {
+        self.index
+    }
+}
+
+impl BlockRefReadWrite for UnicodePageRef {
+    fn new(page: UnicodePageId, index: UnicodeByteIndex) -> Self {
+        Self::new(page, index)
+    }
+}
+
+#[derive(Clone, Copy, Default, Debug)]
 pub struct AnsiBlockRef {
     block: AnsiBlockId,
     index: AnsiByteIndex,
@@ -69,5 +100,36 @@ impl BlockRef for AnsiBlockRef {
 impl BlockRefReadWrite for AnsiBlockRef {
     fn new(block: AnsiBlockId, index: AnsiByteIndex) -> Self {
         Self::new(block, index)
+    }
+}
+
+#[derive(Clone, Copy, Default, Debug)]
+pub struct AnsiPageRef {
+    page: AnsiPageId,
+    index: AnsiByteIndex,
+}
+
+impl AnsiPageRef {
+    pub fn new(page: AnsiPageId, index: AnsiByteIndex) -> Self {
+        Self { page, index }
+    }
+}
+
+impl BlockRef for AnsiPageRef {
+    type Block = AnsiPageId;
+    type Index = AnsiByteIndex;
+
+    fn block(&self) -> AnsiPageId {
+        self.page
+    }
+
+    fn index(&self) -> AnsiByteIndex {
+        self.index
+    }
+}
+
+impl BlockRefReadWrite for AnsiPageRef {
+    fn new(page: AnsiPageId, index: AnsiByteIndex) -> Self {
+        Self::new(page, index)
     }
 }

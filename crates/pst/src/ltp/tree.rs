@@ -2,14 +2,13 @@
 
 use byteorder::{ReadBytesExt, WriteBytesExt};
 use core::mem;
-use std::io::{self, Cursor, Read, Seek, Write};
-
-use crate::ndb::{
-    header::NdbCryptMethod,
-    page::{AnsiBlockBTree, UnicodeBlockBTree},
+use std::{
+    io::{self, Cursor, Read, Write},
+    marker::PhantomData,
 };
 
 use super::{heap::*, read_write::*, *};
+use crate::{AnsiPstFile, PstFile, UnicodePstFile};
 
 /// [BTHHEADER](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/8e4ae05c-3c24-4103-b7e5-ffef6f244834)
 #[derive(Clone, Copy, Debug)]
@@ -69,7 +68,7 @@ pub trait HeapTreeEntryValue: Copy + Sized {
     const SIZE: u8;
 }
 
-impl HeapNodeReadWrite for HeapTreeHeader {
+impl HeapNodePageReadWrite for HeapTreeHeader {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let heap_type = HeapNodeType::try_from(f.read_u8()?)?;
         if heap_type != HeapNodeType::Tree {
@@ -123,9 +122,9 @@ where
     }
 }
 
-impl<K> HeapNodeReadWrite for HeapTreeIntermediateEntry<K>
+impl<K> HeapNodePageReadWrite for HeapTreeIntermediateEntry<K>
 where
-    K: HeapNodeReadWrite + HeapTreeEntryKey,
+    K: HeapNodePageReadWrite + HeapTreeEntryKey,
 {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let key = K::read(f)?;
@@ -169,10 +168,10 @@ where
     }
 }
 
-impl<K, V> HeapNodeReadWrite for HeapTreeLeafEntry<K, V>
+impl<K, V> HeapNodePageReadWrite for HeapTreeLeafEntry<K, V>
 where
-    K: HeapNodeReadWrite + HeapTreeEntryKey,
-    V: HeapNodeReadWrite + Copy,
+    K: HeapNodePageReadWrite + HeapTreeEntryKey,
+    V: HeapNodePageReadWrite + Copy,
 {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let key = K::read(f)?;
@@ -187,46 +186,48 @@ where
     }
 }
 
-pub struct UnicodeHeapTree {
-    heap: UnicodeHeapNode,
-    user_root: HeapId,
+pub trait HeapTree {
+    type Key: HeapTreeEntryKey;
+    type Value: HeapTreeEntryValue;
+
+    fn heap(&self) -> &dyn HeapNode;
+    fn user_root(&self) -> HeapId;
+    fn header(&self) -> io::Result<HeapTreeHeader>;
+    fn entries(&self) -> io::Result<Vec<HeapTreeLeafEntry<Self::Key, Self::Value>>>;
 }
 
-impl UnicodeHeapTree {
-    pub fn new(heap: UnicodeHeapNode, user_root: HeapId) -> Self {
-        Self { heap, user_root }
+struct HeapTreeInner<Pst, K, V>
+where
+    Pst: PstFile,
+    K: HeapTreeEntryKey + HeapNodePageReadWrite,
+    V: HeapTreeEntryValue + HeapNodePageReadWrite,
+{
+    heap: <Pst as PstFile>::HeapNode,
+    user_root: HeapId,
+    _phantom: PhantomData<(K, V)>,
+}
+
+impl<Pst, K, V> HeapTreeInner<Pst, K, V>
+where
+    Pst: PstFile,
+    K: HeapTreeEntryKey + HeapNodePageReadWrite,
+    V: HeapTreeEntryValue + HeapNodePageReadWrite,
+{
+    fn new(heap: <Pst as PstFile>::HeapNode, user_root: HeapId) -> Self {
+        Self {
+            heap,
+            user_root,
+            _phantom: PhantomData,
+        }
     }
 
-    pub fn heap(&self) -> &UnicodeHeapNode {
-        &self.heap
+    fn header(&self) -> io::Result<HeapTreeHeader> {
+        let mut cursor = Cursor::new(self.heap.find_entry(self.user_root)?);
+        HeapTreeHeader::read(&mut cursor)
     }
 
-    pub fn header<R: Read + Seek>(
-        &self,
-        f: &mut R,
-        encoding: NdbCryptMethod,
-        block_tree: &UnicodeBlockBTree,
-    ) -> io::Result<HeapTreeHeader> {
-        let header = self
-            .heap
-            .find_entry(self.user_root, f, encoding, block_tree)?;
-
-        let mut cursor = header.as_slice();
-        let header = HeapTreeHeader::read(&mut cursor)?;
-        Ok(header)
-    }
-
-    pub fn entries<
-        R: Read + Seek,
-        K: HeapTreeEntryKey + HeapNodeReadWrite,
-        V: HeapTreeEntryValue + HeapNodeReadWrite,
-    >(
-        &self,
-        f: &mut R,
-        encoding: NdbCryptMethod,
-        block_tree: &UnicodeBlockBTree,
-    ) -> io::Result<Vec<HeapTreeLeafEntry<K, V>>> {
-        let header = self.header(f, encoding, block_tree)?;
+    fn entries(&self) -> io::Result<Vec<HeapTreeLeafEntry<K, V>>> {
+        let header = self.header()?;
         if header.key_size() != K::SIZE {
             return Err(LtpError::InvalidHeapTreeKeySize(header.key_size()).into());
         }
@@ -243,9 +244,7 @@ impl UnicodeHeapTree {
 
         while level > 0 {
             for heap_id in mem::take(&mut next_level).into_iter() {
-                let mut cursor =
-                    Cursor::new(self.heap.find_entry(heap_id, f, encoding, block_tree)?);
-
+                let mut cursor = Cursor::new(self.heap.find_entry(heap_id)?);
                 while let Ok(row) = HeapTreeIntermediateEntry::<K>::read(&mut cursor) {
                     next_level.push(row.next_level());
                 }
@@ -256,8 +255,7 @@ impl UnicodeHeapTree {
 
         let mut results = Vec::new();
         for heap_id in mem::take(&mut next_level).into_iter() {
-            let mut cursor = Cursor::new(self.heap.find_entry(heap_id, f, encoding, block_tree)?);
-
+            let mut cursor = Cursor::new(self.heap.find_entry(heap_id)?);
             while let Ok(row) = HeapTreeLeafEntry::<K, V>::read(&mut cursor) {
                 results.push(row);
             }
@@ -267,94 +265,110 @@ impl UnicodeHeapTree {
     }
 }
 
-impl From<UnicodeHeapTree> for UnicodeHeapNode {
-    fn from(value: UnicodeHeapTree) -> Self {
-        value.heap
+pub struct UnicodeHeapTree<K, V>
+where
+    K: HeapTreeEntryKey + HeapNodePageReadWrite,
+    V: HeapTreeEntryValue + HeapNodePageReadWrite,
+{
+    inner: HeapTreeInner<UnicodePstFile, K, V>,
+}
+
+impl<K, V> HeapTree for UnicodeHeapTree<K, V>
+where
+    K: HeapTreeEntryKey + HeapNodePageReadWrite,
+    V: HeapTreeEntryValue + HeapNodePageReadWrite,
+{
+    type Key = K;
+    type Value = V;
+
+    fn heap(&self) -> &dyn HeapNode {
+        &self.inner.heap
+    }
+
+    fn user_root(&self) -> HeapId {
+        self.inner.user_root
+    }
+
+    fn header(&self) -> io::Result<HeapTreeHeader> {
+        self.inner.header()
+    }
+
+    fn entries(&self) -> io::Result<Vec<HeapTreeLeafEntry<K, V>>> {
+        self.inner.entries()
     }
 }
 
-pub struct AnsiHeapTree {
-    heap: AnsiHeapNode,
-    user_root: HeapId,
-}
-
-impl AnsiHeapTree {
-    pub fn new(heap: AnsiHeapNode, user_root: HeapId) -> Self {
-        Self { heap, user_root }
-    }
-
-    pub fn heap(&self) -> &AnsiHeapNode {
-        &self.heap
-    }
-
-    pub fn header<R: Read + Seek>(
-        &self,
-        f: &mut R,
-        encoding: NdbCryptMethod,
-        block_tree: &AnsiBlockBTree,
-    ) -> io::Result<HeapTreeHeader> {
-        let header = self
-            .heap
-            .find_entry(self.user_root, f, encoding, block_tree)?;
-
-        let mut cursor = header.as_slice();
-        let header = HeapTreeHeader::read(&mut cursor)?;
-        Ok(header)
-    }
-
-    pub fn entries<
-        R: Read + Seek,
-        K: HeapTreeEntryKey + HeapNodeReadWrite,
-        V: HeapTreeEntryValue + HeapNodeReadWrite,
-    >(
-        &self,
-        f: &mut R,
-        encoding: NdbCryptMethod,
-        block_tree: &AnsiBlockBTree,
-    ) -> io::Result<Vec<HeapTreeLeafEntry<K, V>>> {
-        let header = self.header(f, encoding, block_tree)?;
-        if header.key_size() != K::SIZE {
-            return Err(LtpError::InvalidHeapTreeKeySize(header.key_size()).into());
-        }
-        if header.entry_size() != V::SIZE {
-            return Err(LtpError::InvalidHeapTreeDataSize(header.entry_size()).into());
-        }
-
-        if u32::from(header.root()) == 0 {
-            return Ok(Default::default());
-        }
-
-        let mut level = header.levels();
-        let mut next_level = vec![header.root()];
-
-        while level > 0 {
-            for heap_id in mem::take(&mut next_level).into_iter() {
-                let mut cursor =
-                    Cursor::new(self.heap.find_entry(heap_id, f, encoding, block_tree)?);
-
-                while let Ok(row) = HeapTreeIntermediateEntry::<K>::read(&mut cursor) {
-                    next_level.push(row.next_level());
-                }
-            }
-
-            level -= 1;
-        }
-
-        let mut results = Vec::new();
-        for heap_id in mem::take(&mut next_level).into_iter() {
-            let mut cursor = Cursor::new(self.heap.find_entry(heap_id, f, encoding, block_tree)?);
-
-            while let Ok(row) = HeapTreeLeafEntry::<K, V>::read(&mut cursor) {
-                results.push(row);
-            }
-        }
-
-        Ok(results)
+impl<K, V> HeapTreeReadWrite<UnicodePstFile> for UnicodeHeapTree<K, V>
+where
+    K: HeapTreeEntryKey + HeapNodePageReadWrite,
+    V: HeapTreeEntryValue + HeapNodePageReadWrite,
+{
+    fn new(heap: UnicodeHeapNode, user_root: HeapId) -> Self {
+        let inner = HeapTreeInner::new(heap, user_root);
+        Self { inner }
     }
 }
 
-impl From<AnsiHeapTree> for AnsiHeapNode {
-    fn from(value: AnsiHeapTree) -> Self {
-        value.heap
+impl<K, V> From<UnicodeHeapTree<K, V>> for UnicodeHeapNode
+where
+    K: HeapTreeEntryKey + HeapNodePageReadWrite,
+    V: HeapTreeEntryValue + HeapNodePageReadWrite,
+{
+    fn from(value: UnicodeHeapTree<K, V>) -> Self {
+        value.inner.heap
+    }
+}
+
+pub struct AnsiHeapTree<K, V>
+where
+    K: HeapTreeEntryKey + HeapNodePageReadWrite,
+    V: HeapTreeEntryValue + HeapNodePageReadWrite,
+{
+    inner: HeapTreeInner<AnsiPstFile, K, V>,
+}
+
+impl<K, V> HeapTree for AnsiHeapTree<K, V>
+where
+    K: HeapTreeEntryKey + HeapNodePageReadWrite,
+    V: HeapTreeEntryValue + HeapNodePageReadWrite,
+{
+    type Key = K;
+    type Value = V;
+
+    fn heap(&self) -> &dyn HeapNode {
+        &self.inner.heap
+    }
+
+    fn user_root(&self) -> HeapId {
+        self.inner.user_root
+    }
+
+    fn header(&self) -> io::Result<HeapTreeHeader> {
+        self.inner.header()
+    }
+
+    fn entries(&self) -> io::Result<Vec<HeapTreeLeafEntry<K, V>>> {
+        self.inner.entries()
+    }
+}
+
+impl<K, V> HeapTreeReadWrite<AnsiPstFile> for AnsiHeapTree<K, V>
+where
+    K: HeapTreeEntryKey + HeapNodePageReadWrite,
+    V: HeapTreeEntryValue + HeapNodePageReadWrite,
+{
+    fn new(heap: AnsiHeapNode, user_root: HeapId) -> Self {
+        let inner = HeapTreeInner::new(heap, user_root);
+        Self { inner }
+    }
+}
+
+impl<K, V> From<AnsiHeapTree<K, V>> for AnsiHeapNode
+where
+    K: HeapTreeEntryKey + HeapNodePageReadWrite,
+    V: HeapTreeEntryValue + HeapNodePageReadWrite,
+{
+    fn from(value: AnsiHeapTree<K, V>) -> Self {
+        value.inner.heap
     }
 }

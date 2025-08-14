@@ -113,8 +113,6 @@ pub enum NdbError {
     InvalidSubNodeBlockPadding(u32),
     #[error("Sub-node not found: {0:?}")]
     SubNodeNotFound(NodeId),
-    #[error("Invalid ANSI free space: 0x{0:016X}")]
-    InvalidAnsiFreeSpace(u64),
 }
 
 impl From<NdbError> for io::Error {

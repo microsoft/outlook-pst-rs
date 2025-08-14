@@ -12,22 +12,20 @@ use super::{read_write::*, store::*, *};
 use crate::{
     crc::compute_crc,
     ltp::{
-        heap::{AnsiHeapNode, UnicodeHeapNode},
-        prop_context::{AnsiPropertyContext, GuidValue, PropertyValue, UnicodePropertyContext},
+        heap::HeapNode,
+        prop_context::{GuidValue, PropertyContext, PropertyValue},
         prop_type::PropertyType,
-        read_write::PropertyValueReadWrite,
-        tree::{AnsiHeapTree, UnicodeHeapTree},
+        read_write::*,
     },
     ndb::{
-        block::{AnsiDataTree, UnicodeDataTree},
+        block_id::BlockId,
         header::Header,
         node_id::NID_NAME_TO_ID_MAP,
-        page::{
-            AnsiBlockBTree, AnsiNodeBTree, NodeBTreeEntry, UnicodeBlockBTree, UnicodeNodeBTree,
-        },
+        page::{BTreePage, NodeBTreeEntry, RootBTree},
+        read_write::*,
         root::Root,
     },
-    PstFile,
+    AnsiPstFile, PstFile, PstFileLock, UnicodePstFile,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -456,17 +454,52 @@ impl NamedPropertyMapProperties {
     }
 }
 
-pub struct UnicodeNamedPropertyMap {
-    store: Rc<UnicodeStore>,
+pub trait NamedPropertyMap {
+    fn store(&self) -> Rc<dyn Store>;
+    fn properties(&self) -> &NamedPropertyMapProperties;
+}
+
+struct NamedPropertyMapInner<Pst>
+where
+    Pst: PstFile,
+{
+    store: Rc<Pst::Store>,
     properties: NamedPropertyMapProperties,
 }
 
-impl UnicodeNamedPropertyMap {
-    pub fn store(&self) -> &Rc<UnicodeStore> {
-        &self.store
-    }
-
-    pub fn read(store: Rc<UnicodeStore>) -> io::Result<Rc<Self>> {
+impl<Pst> NamedPropertyMapInner<Pst>
+where
+    Pst: PstFile + PstFileLock<Pst>,
+    <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+    <Pst as PstFile>::NodeBTreeEntry: NodeBTreeEntryReadWrite,
+    <Pst as PstFile>::NodeBTree: RootBTreeReadWrite,
+    <<Pst as PstFile>::NodeBTree as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePageReadWrite<
+            Pst,
+            <Pst as PstFile>::NodeBTreeEntry,
+            <<Pst as PstFile>::NodeBTree as RootBTree>::LeafPage,
+        >,
+    <<<Pst as PstFile>::NodeBTree as RootBTree>::IntermediatePage as BTreePage>::Entry:
+        BTreePageEntryReadWrite,
+    <<Pst as PstFile>::NodeBTree as RootBTree>::LeafPage: RootBTreeLeafPageReadWrite<Pst>,
+    <Pst as PstFile>::BlockBTreeEntry: BlockBTreeEntryReadWrite,
+    <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePageReadWrite<
+            Pst,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+        >,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+        RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+    <Pst as PstFile>::BlockTrailer: BlockTrailerReadWrite,
+    <Pst as PstFile>::HeapNode: HeapNodeReadWrite<Pst>,
+    <Pst as PstFile>::PropertyTree: HeapTreeReadWrite<Pst>,
+    <Pst as PstFile>::PropertyContext: PropertyContextReadWrite<Pst>,
+    <Pst as PstFile>::Store: StoreReadWrite<Pst>,
+{
+    fn read(store: Rc<<Pst as PstFile>::Store>) -> io::Result<Self> {
         let pst = store.pst();
         let header = pst.header();
         let root = header.root();
@@ -479,87 +512,88 @@ impl UnicodeNamedPropertyMap {
             let file = &mut *file;
 
             let encoding = header.crypt_method();
-            let node_btree = UnicodeNodeBTree::read(file, *root.node_btree())?;
-            let block_btree = UnicodeBlockBTree::read(file, *root.block_btree())?;
+            let node_btree = <<Pst as PstFile>::NodeBTree as RootBTreeReadWrite>::read(
+                file,
+                *root.node_btree(),
+            )?;
+            let block_btree = <<Pst as PstFile>::BlockBTree as RootBTreeReadWrite>::read(
+                file,
+                *root.block_btree(),
+            )?;
 
-            let node = node_btree.find_entry(file, u64::from(u32::from(NID_NAME_TO_ID_MAP)))?;
+            let mut page_cache = pst.node_cache();
+            let node_key: <Pst as PstFile>::BTreeKey = u32::from(NID_NAME_TO_ID_MAP).into();
+            let node = node_btree.find_entry(file, node_key, &mut page_cache)?;
+
+            let mut page_cache = pst.block_cache();
             let data = node.data();
-            let block = block_btree.find_entry(file, u64::from(data))?;
-            let heap = UnicodeHeapNode::new(UnicodeDataTree::read(file, encoding, &block)?);
-            let header = heap.header(file, encoding, &block_btree)?;
+            let heap = <<Pst as PstFile>::HeapNode as HeapNodeReadWrite<Pst>>::read(
+                file,
+                &block_btree,
+                &mut page_cache,
+                encoding,
+                data.search_key(),
+            )?;
+            let header = heap.header()?;
 
-            let tree = UnicodeHeapTree::new(heap, header.user_root());
-            let prop_context = UnicodePropertyContext::new(node, tree);
+            let tree = <Pst as PstFile>::PropertyTree::new(heap, header.user_root());
+            let prop_context = <<Pst as PstFile>::PropertyContext as PropertyContextReadWrite<
+                Pst,
+            >>::new(node, tree);
             let properties = prop_context
-                .properties(file, encoding, &block_btree)?
+                .properties()?
                 .into_iter()
                 .map(|(prop_id, record)| {
                     prop_context
-                        .read_property(file, encoding, &block_btree, record)
+                        .read_property(file, encoding, &block_btree, &mut page_cache, record)
                         .map(|value| (prop_id, value))
                 })
                 .collect::<io::Result<BTreeMap<_, _>>>()?;
             NamedPropertyMapProperties { properties }
         };
 
-        Ok(Rc::new(Self { store, properties }))
+        Ok(Self { store, properties })
+    }
+}
+
+pub struct UnicodeNamedPropertyMap {
+    inner: NamedPropertyMapInner<UnicodePstFile>,
+}
+
+impl NamedPropertyMap for UnicodeNamedPropertyMap {
+    fn store(&self) -> Rc<dyn Store> {
+        self.inner.store.clone()
     }
 
-    pub fn properties(&self) -> &NamedPropertyMapProperties {
-        &self.properties
+    fn properties(&self) -> &NamedPropertyMapProperties {
+        &self.inner.properties
+    }
+}
+
+impl NamedPropertyMapReadWrite<UnicodePstFile> for UnicodeNamedPropertyMap {
+    fn read(store: Rc<UnicodeStore>) -> io::Result<Rc<Self>> {
+        let inner = NamedPropertyMapInner::read(store)?;
+        Ok(Rc::new(Self { inner }))
     }
 }
 
 pub struct AnsiNamedPropertyMap {
-    store: Rc<AnsiStore>,
-    properties: NamedPropertyMapProperties,
+    inner: NamedPropertyMapInner<AnsiPstFile>,
 }
 
-impl AnsiNamedPropertyMap {
-    pub fn store(&self) -> &Rc<AnsiStore> {
-        &self.store
+impl NamedPropertyMap for AnsiNamedPropertyMap {
+    fn store(&self) -> Rc<dyn Store> {
+        self.inner.store.clone()
     }
 
-    pub fn read(store: Rc<AnsiStore>) -> io::Result<Rc<Self>> {
-        let pst = store.pst();
-        let header = pst.header();
-        let root = header.root();
-
-        let properties = {
-            let mut file = pst
-                .reader()
-                .lock()
-                .map_err(|_| MessagingError::FailedToLockFile)?;
-            let file = &mut *file;
-
-            let encoding = header.crypt_method();
-            let node_btree = AnsiNodeBTree::read(file, *root.node_btree())?;
-            let block_btree = AnsiBlockBTree::read(file, *root.block_btree())?;
-
-            let node = node_btree.find_entry(file, u32::from(NID_NAME_TO_ID_MAP))?;
-            let data = node.data();
-            let block = block_btree.find_entry(file, u32::from(data))?;
-            let heap = AnsiHeapNode::new(AnsiDataTree::read(file, encoding, &block)?);
-            let header = heap.header(file, encoding, &block_btree)?;
-
-            let tree = AnsiHeapTree::new(heap, header.user_root());
-            let prop_context = AnsiPropertyContext::new(node, tree);
-            let properties = prop_context
-                .properties(file, encoding, &block_btree)?
-                .into_iter()
-                .map(|(prop_id, record)| {
-                    prop_context
-                        .read_property(file, encoding, &block_btree, record)
-                        .map(|value| (prop_id, value))
-                })
-                .collect::<io::Result<BTreeMap<_, _>>>()?;
-            NamedPropertyMapProperties { properties }
-        };
-
-        Ok(Rc::new(Self { store, properties }))
+    fn properties(&self) -> &NamedPropertyMapProperties {
+        &self.inner.properties
     }
+}
 
-    pub fn properties(&self) -> &NamedPropertyMapProperties {
-        &self.properties
+impl NamedPropertyMapReadWrite<AnsiPstFile> for AnsiNamedPropertyMap {
+    fn read(store: Rc<AnsiStore>) -> io::Result<Rc<Self>> {
+        let inner = NamedPropertyMapInner::read(store)?;
+        Ok(Rc::new(Self { inner }))
     }
 }

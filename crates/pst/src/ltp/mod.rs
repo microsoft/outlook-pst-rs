@@ -61,6 +61,8 @@ pub enum LtpError {
     InvalidPropertyTreeKeySize(u8),
     #[error("Invalid PC property tree entry size: 0x{0:X}")]
     InvalidPropertyTreeEntrySize(u8),
+    #[error("Failed to lock PST file")]
+    FailedToLockFile,
     #[error("Invalid TCINFO bType: {0:?}")]
     InvalidTableContextHeapTreeNodeType(heap::HeapNodeType),
     #[error("Invalid TCOLDESC count: 0x{0:X}")]

@@ -8,16 +8,23 @@ use std::{
 
 use super::{read_write::*, *};
 
-pub trait BlockId: Copy + Sized {
+pub trait BlockId: Copy + Default + PartialEq + Eq + PartialOrd + Ord + Sized {
     type Index: Copy + Sized + From<Self> + Into<u64>;
+
+    fn into_u64(self) -> u64 {
+        let value: Self::Index = self.into();
+        value.into()
+    }
 
     fn is_internal(&self) -> bool;
     fn index(&self) -> Self::Index;
+    fn search_key(&self) -> Self::Index;
+    fn next(self) -> NdbResult<Self>;
 }
 
 pub const MAX_UNICODE_BLOCK_INDEX: u64 = 1_u64.rotate_right(2) - 1;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct UnicodeBlockId(u64);
 
 impl UnicodeBlockId {
@@ -42,6 +49,14 @@ impl BlockId for UnicodeBlockId {
 
     fn index(&self) -> u64 {
         self.0 >> 2
+    }
+
+    fn search_key(&self) -> u64 {
+        self.0 & !0x1
+    }
+
+    fn next(self) -> NdbResult<Self> {
+        Self::new(self.is_internal(), self.index() + 1)
     }
 }
 
@@ -79,13 +94,65 @@ impl From<u64> for UnicodeBlockId {
 
 impl From<UnicodeBlockId> for u64 {
     fn from(value: UnicodeBlockId) -> Self {
-        value.0 & !0x1
+        value.0
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct UnicodePageId(u64);
+
+impl BlockId for UnicodePageId {
+    type Index = u64;
+
+    fn is_internal(&self) -> bool {
+        false
+    }
+
+    fn index(&self) -> u64 {
+        self.0
+    }
+
+    fn search_key(&self) -> u64 {
+        self.0
+    }
+
+    fn next(self) -> NdbResult<Self> {
+        Ok(Self::from(u64::from(self) + 1))
+    }
+}
+
+impl BlockIdReadWrite for UnicodePageId {
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let value = f.read_u64::<LittleEndian>()?;
+        Ok(Self(value))
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        f.write_u64::<LittleEndian>(self.0)
+    }
+}
+
+impl Debug for UnicodePageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "UnicodePageId: 0x{:X}", self.index())
+    }
+}
+
+impl From<u64> for UnicodePageId {
+    fn from(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+impl From<UnicodePageId> for u64 {
+    fn from(value: UnicodePageId) -> Self {
+        value.0
     }
 }
 
 pub const MAX_ANSI_BLOCK_INDEX: u32 = 1_u32.rotate_right(2) - 1;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct AnsiBlockId(u32);
 
 impl AnsiBlockId {
@@ -110,6 +177,14 @@ impl BlockId for AnsiBlockId {
 
     fn index(&self) -> u32 {
         self.0 >> 2
+    }
+
+    fn search_key(&self) -> u32 {
+        self.0 & !0x1
+    }
+
+    fn next(self) -> NdbResult<Self> {
+        Self::new(self.is_internal(), self.index() + 1)
     }
 }
 
@@ -147,7 +222,59 @@ impl From<u32> for AnsiBlockId {
 
 impl From<AnsiBlockId> for u32 {
     fn from(value: AnsiBlockId) -> Self {
-        value.0 & !0x1
+        value.0
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct AnsiPageId(u32);
+
+impl BlockId for AnsiPageId {
+    type Index = u32;
+
+    fn is_internal(&self) -> bool {
+        false
+    }
+
+    fn index(&self) -> u32 {
+        self.0
+    }
+
+    fn search_key(&self) -> u32 {
+        self.0
+    }
+
+    fn next(self) -> NdbResult<Self> {
+        Ok(Self::from(u32::from(self) + 1))
+    }
+}
+
+impl BlockIdReadWrite for AnsiPageId {
+    fn read(f: &mut dyn Read) -> io::Result<Self> {
+        let value = f.read_u32::<LittleEndian>()?;
+        Ok(Self(value))
+    }
+
+    fn write(&self, f: &mut dyn Write) -> io::Result<()> {
+        f.write_u32::<LittleEndian>(self.0)
+    }
+}
+
+impl Debug for AnsiPageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AnsiPageId: 0x{:X}", self.index())
+    }
+}
+
+impl From<u32> for AnsiPageId {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<AnsiPageId> for u32 {
+    fn from(value: AnsiPageId) -> Self {
+        value.0
     }
 }
 

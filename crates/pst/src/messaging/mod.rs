@@ -28,6 +28,14 @@ pub enum MessagingError {
     InvalidStoreRecordKey(crate::ltp::prop_type::PropertyType),
     #[error("Invalid PidTagRecordKey size on store: 0x{0:X}")]
     InvalidStoreRecordKeySize(usize),
+    #[error("Failed to read root hierarchy table: {0}")]
+    StoreRootHierarchyTableFailed(String),
+    #[error("Failed to open a folder: {0}")]
+    StoreOpenFolder(String),
+    #[error("Failed to read named property map: {0}")]
+    StoreNamedPropertyMap(String),
+    #[error("Failed to read search update queue: {0}")]
+    StoreSearchUpdateQueue(String),
     #[error("Missing PidTagDisplayName on store")]
     StoreDisplayNameNotFound,
     #[error("Invalid PidTagDisplayName on store: {0:?}")]
@@ -130,6 +138,8 @@ pub enum MessagingError {
     InvalidAttachmentFileBinaryData(crate::ltp::prop_type::PropertyType),
     #[error("Missing PidTagAttachDataObject on afStorage attachment")]
     AttachmentStorageObjectDataNotFound,
+    #[error("Reading afStorage attachment failed: {0}")]
+    AttachmentStorageRead(String),
     #[error("Invalid PidTagAttachDataObject on afStorage attachment: {0:?}")]
     InvalidStorageObjectData(crate::ltp::prop_type::PropertyType),
     #[error("NAMEID wGuid is out of bounds: 0x{0:04X}")]

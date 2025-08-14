@@ -44,12 +44,12 @@ pub trait Root<Pst>
 where
     Pst: PstFile,
 {
-    fn file_eof_index(&self) -> &<<Pst as PstFile>::BlockRef as BlockRef>::Index;
-    fn amap_last_index(&self) -> &<<Pst as PstFile>::BlockRef as BlockRef>::Index;
-    fn amap_free_size(&self) -> &<<Pst as PstFile>::BlockRef as BlockRef>::Index;
-    fn pmap_free_size(&self) -> &<<Pst as PstFile>::BlockRef as BlockRef>::Index;
-    fn node_btree(&self) -> &<Pst as PstFile>::BlockRef;
-    fn block_btree(&self) -> &<Pst as PstFile>::BlockRef;
+    fn file_eof_index(&self) -> &<Pst as PstFile>::ByteIndex;
+    fn amap_last_index(&self) -> &<Pst as PstFile>::ByteIndex;
+    fn amap_free_size(&self) -> &<Pst as PstFile>::ByteIndex;
+    fn pmap_free_size(&self) -> &<Pst as PstFile>::ByteIndex;
+    fn node_btree(&self) -> &<Pst as PstFile>::PageRef;
+    fn block_btree(&self) -> &<Pst as PstFile>::PageRef;
     fn amap_is_valid(&self) -> AmapStatus;
 }
 
@@ -60,8 +60,8 @@ pub struct UnicodeRoot {
     amap_last_index: UnicodeByteIndex,
     amap_free_size: UnicodeByteIndex,
     pmap_free_size: UnicodeByteIndex,
-    node_btree: UnicodeBlockRef,
-    block_btree: UnicodeBlockRef,
+    node_btree: UnicodePageRef,
+    block_btree: UnicodePageRef,
     amap_is_valid: AmapStatus,
     reserved2: u8,
     reserved3: u16,
@@ -73,8 +73,8 @@ impl UnicodeRoot {
         amap_last_index: UnicodeByteIndex,
         amap_free_size: UnicodeByteIndex,
         pmap_free_size: UnicodeByteIndex,
-        node_btree: UnicodeBlockRef,
-        block_btree: UnicodeBlockRef,
+        node_btree: UnicodePageRef,
+        block_btree: UnicodePageRef,
         amap_is_valid: AmapStatus,
     ) -> Self {
         Self {
@@ -109,11 +109,11 @@ impl Root<UnicodePstFile> for UnicodeRoot {
         &self.pmap_free_size
     }
 
-    fn node_btree(&self) -> &UnicodeBlockRef {
+    fn node_btree(&self) -> &UnicodePageRef {
         &self.node_btree
     }
 
-    fn block_btree(&self) -> &UnicodeBlockRef {
+    fn block_btree(&self) -> &UnicodePageRef {
         &self.block_btree
     }
 
@@ -128,8 +128,8 @@ impl RootReadWrite<UnicodePstFile> for UnicodeRoot {
         amap_last_index: UnicodeByteIndex,
         amap_free_size: UnicodeByteIndex,
         pmap_free_size: UnicodeByteIndex,
-        node_btree: UnicodeBlockRef,
-        block_btree: UnicodeBlockRef,
+        node_btree: UnicodePageRef,
+        block_btree: UnicodePageRef,
         amap_is_valid: AmapStatus,
     ) -> Self {
         Self::new(
@@ -165,9 +165,9 @@ impl RootReadWrite<UnicodePstFile> for UnicodeRoot {
         self.amap_is_valid = status;
     }
 
-    fn reset_free_size(&mut self, free_bytes: u64) -> NdbResult<()> {
-        self.amap_free_size = UnicodeByteIndex::from(free_bytes);
-        self.pmap_free_size = UnicodeByteIndex::from(0);
+    fn reset_free_size(&mut self, free_bytes: UnicodeByteIndex) -> NdbResult<()> {
+        self.amap_free_size = free_bytes;
+        self.pmap_free_size = 0.into();
         Ok(())
     }
 }
@@ -178,8 +178,8 @@ pub struct AnsiRoot {
     amap_last_index: AnsiByteIndex,
     amap_free_size: AnsiByteIndex,
     pmap_free_size: AnsiByteIndex,
-    node_btree: AnsiBlockRef,
-    block_btree: AnsiBlockRef,
+    node_btree: AnsiPageRef,
+    block_btree: AnsiPageRef,
     amap_is_valid: AmapStatus,
     reserved1: u32,
     reserved2: u8,
@@ -192,8 +192,8 @@ impl AnsiRoot {
         amap_last_index: AnsiByteIndex,
         amap_free_size: AnsiByteIndex,
         pmap_free_size: AnsiByteIndex,
-        node_btree: AnsiBlockRef,
-        block_btree: AnsiBlockRef,
+        node_btree: AnsiPageRef,
+        block_btree: AnsiPageRef,
         amap_is_valid: AmapStatus,
     ) -> Self {
         Self {
@@ -228,11 +228,11 @@ impl Root<AnsiPstFile> for AnsiRoot {
         &self.pmap_free_size
     }
 
-    fn node_btree(&self) -> &AnsiBlockRef {
+    fn node_btree(&self) -> &AnsiPageRef {
         &self.node_btree
     }
 
-    fn block_btree(&self) -> &AnsiBlockRef {
+    fn block_btree(&self) -> &AnsiPageRef {
         &self.block_btree
     }
 
@@ -247,8 +247,8 @@ impl RootReadWrite<AnsiPstFile> for AnsiRoot {
         amap_last_index: AnsiByteIndex,
         amap_free_size: AnsiByteIndex,
         pmap_free_size: AnsiByteIndex,
-        node_btree: AnsiBlockRef,
-        block_btree: AnsiBlockRef,
+        node_btree: AnsiPageRef,
+        block_btree: AnsiPageRef,
         amap_is_valid: AmapStatus,
     ) -> Self {
         Self::new(
@@ -284,11 +284,9 @@ impl RootReadWrite<AnsiPstFile> for AnsiRoot {
         self.amap_is_valid = status;
     }
 
-    fn reset_free_size(&mut self, free_bytes: u64) -> NdbResult<()> {
-        let free_bytes =
-            u32::try_from(free_bytes).map_err(|_| NdbError::InvalidAnsiFreeSpace(free_bytes))?;
-        self.amap_free_size = AnsiByteIndex::from(free_bytes);
-        self.pmap_free_size = AnsiByteIndex::from(0);
+    fn reset_free_size(&mut self, free_bytes: AnsiByteIndex) -> NdbResult<()> {
+        self.amap_free_size = free_bytes;
+        self.pmap_free_size = 0.into();
         Ok(())
     }
 }

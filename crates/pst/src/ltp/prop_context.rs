@@ -3,21 +3,27 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use core::mem;
 use std::{
+    cell::RefCell,
     collections::BTreeMap,
     fmt::{Debug, Display},
-    io::{self, Cursor, Read, Seek, Write},
+    io::{self, Cursor, Read, Write},
 };
 
 use super::{heap::*, prop_type::*, read_write::*, tree::*, *};
-use crate::ndb::{
-    block::{AnsiDataTree, AnsiSubNodeTree, Block, UnicodeDataTree, UnicodeSubNodeTree},
-    header::NdbCryptMethod,
-    node_id::{NodeId, NodeIdType},
-    page::{
-        AnsiBlockBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, UnicodeBlockBTree,
-        UnicodeNodeBTreeEntry,
+use crate::{
+    ndb::{
+        block::{DataBlockCache, DataTree, IntermediateTreeBlock, SubNodeTree},
+        block_id::BlockId,
+        block_ref::BlockRef,
+        header::NdbCryptMethod,
+        node_id::{NodeId, NodeIdType},
+        page::{
+            AnsiBlockBTree, AnsiNodeBTreeEntry, BlockBTreeEntry, NodeBTreeEntry, RootBTree,
+            UnicodeBlockBTree, UnicodeNodeBTreeEntry,
+        },
+        read_write::*,
     },
-    read_write::NodeIdReadWrite,
+    AnsiPstFile, PstFile, PstFileReadWriteBlockBTree, PstReader, UnicodePstFile,
 };
 
 #[derive(Copy, Clone)]
@@ -76,7 +82,7 @@ impl HeapTreeEntryKey for PropertyTreeRecordKey {
     const SIZE: u8 = 2;
 }
 
-impl HeapNodeReadWrite for PropertyTreeRecordKey {
+impl HeapNodePageReadWrite for PropertyTreeRecordKey {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         f.read_u16::<LittleEndian>()
     }
@@ -110,7 +116,7 @@ impl HeapTreeEntryValue for PropertyTreeRecordValue {
     const SIZE: u8 = 6;
 }
 
-impl HeapNodeReadWrite for PropertyTreeRecordValue {
+impl HeapNodePageReadWrite for PropertyTreeRecordValue {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         // wPropType
         let prop_type = f.read_u16::<LittleEndian>()?;
@@ -306,6 +312,10 @@ pub struct BinaryValue {
 }
 
 impl BinaryValue {
+    pub fn new(buffer: Vec<u8>) -> Self {
+        Self { buffer }
+    }
+
     pub fn buffer(&self) -> &[u8] {
         &self.buffer
     }
@@ -621,10 +631,14 @@ impl PropertyValueReadWrite for PropertyValue {
                             return Err(LtpError::InvalidMultiValuePropertyOffset(next).into());
                         }
 
-                        let mut buffer = vec![0; next - start];
-                        start = next;
-                        f.read_exact(&mut buffer)?;
-                        buffer
+                        if next > start {
+                            let mut buffer = vec![0; next - start];
+                            start = next;
+                            f.read_exact(&mut buffer)?;
+                            buffer
+                        } else {
+                            Default::default()
+                        }
                     } else {
                         let mut buffer = Vec::new();
                         f.read_to_end(&mut buffer)?;
@@ -743,10 +757,14 @@ impl PropertyValueReadWrite for PropertyValue {
                             return Err(LtpError::InvalidMultiValuePropertyOffset(next).into());
                         }
 
-                        let mut buffer = vec![0; next - start];
-                        start = next;
-                        f.read_exact(&mut buffer)?;
-                        buffer
+                        if next > start {
+                            let mut buffer = vec![0; next - start];
+                            start = next;
+                            f.read_exact(&mut buffer)?;
+                            buffer
+                        } else {
+                            Default::default()
+                        }
                     } else {
                         let mut buffer = Vec::new();
                         f.read_to_end(&mut buffer)?;
@@ -940,184 +958,238 @@ impl PropertyValueReadWrite for PropertyValue {
     }
 }
 
-pub struct UnicodePropertyContext {
-    node: UnicodeNodeBTreeEntry,
-    tree: UnicodeHeapTree,
+pub type PropertyTree = dyn HeapTree<Key = PropertyTreeRecordKey, Value = PropertyTreeRecordValue>;
+
+pub trait PropertyContext {
+    fn tree(&self) -> &PropertyTree;
+    fn properties(&self) -> io::Result<BTreeMap<PropertyTreeRecordKey, PropertyTreeRecordValue>>;
 }
 
-impl UnicodePropertyContext {
-    pub fn new(node: UnicodeNodeBTreeEntry, tree: UnicodeHeapTree) -> Self {
-        Self { node, tree }
+struct PropertyContextInner<Pst>
+where
+    Pst: PstFile,
+{
+    node: <Pst as PstFile>::NodeBTreeEntry,
+    tree: <Pst as PstFile>::PropertyTree,
+    block_cache: RefCell<DataBlockCache<Pst>>,
+}
+
+impl<Pst> PropertyContextInner<Pst>
+where
+    Pst: PstFile,
+    <Pst as PstFile>::BlockId: BlockId<Index = <Pst as PstFile>::BTreeKey> + BlockIdReadWrite,
+    <Pst as PstFile>::ByteIndex: ByteIndexReadWrite,
+    <Pst as PstFile>::BlockRef: BlockRefReadWrite,
+    <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
+    <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+    <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePageReadWrite<
+            Pst,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+        >,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+        RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+    <Pst as PstFile>::BlockTrailer: BlockTrailerReadWrite,
+    <Pst as PstFile>::DataTreeBlock: IntermediateTreeBlockReadWrite,
+    <<Pst as PstFile>::DataTreeBlock as IntermediateTreeBlock>::Entry:
+        IntermediateTreeEntryReadWrite,
+    <Pst as PstFile>::DataBlock: BlockReadWrite + Clone,
+    <Pst as PstFile>::SubNodeTreeBlockHeader: IntermediateTreeHeaderReadWrite,
+    <Pst as PstFile>::SubNodeTreeBlock: IntermediateTreeBlockReadWrite,
+    <<Pst as PstFile>::SubNodeTreeBlock as IntermediateTreeBlock>::Entry:
+        IntermediateTreeEntryReadWrite,
+    <Pst as PstFile>::SubNodeBlock: IntermediateTreeBlockReadWrite,
+    <<Pst as PstFile>::SubNodeBlock as IntermediateTreeBlock>::Entry:
+        IntermediateTreeEntryReadWrite,
+{
+    fn new(node: <Pst as PstFile>::NodeBTreeEntry, tree: <Pst as PstFile>::PropertyTree) -> Self {
+        Self {
+            node,
+            tree,
+            block_cache: Default::default(),
+        }
     }
 
-    pub fn tree(&self) -> &UnicodeHeapTree {
-        &self.tree
-    }
-
-    pub fn properties<R: Read + Seek>(
-        &self,
-        f: &mut R,
-        encoding: NdbCryptMethod,
-        block_tree: &UnicodeBlockBTree,
-    ) -> io::Result<BTreeMap<PropertyTreeRecordKey, PropertyTreeRecordValue>> {
-        let header = self.tree.header(f, encoding, block_tree)?;
-        let key_size = header.key_size();
-        if key_size != 2 {
-            return Err(LtpError::InvalidPropertyTreeKeySize(key_size).into());
-        }
-        let entry_size = header.entry_size();
-        if entry_size != 6 {
-            return Err(LtpError::InvalidPropertyTreeEntrySize(entry_size).into());
-        }
-
+    fn properties(&self) -> io::Result<BTreeMap<PropertyTreeRecordKey, PropertyTreeRecordValue>> {
         Ok(self
             .tree
-            .entries(f, encoding, block_tree)?
+            .entries()?
             .into_iter()
-            .map(
-                |entry: HeapTreeLeafEntry<PropertyTreeRecordKey, PropertyTreeRecordValue>| {
-                    (
-                        entry.key(),
-                        PropertyTreeRecordValue::new(
-                            entry.data().prop_type(),
-                            entry.data().value(),
-                        ),
-                    )
-                },
-            )
+            .map(|entry| {
+                (
+                    entry.key(),
+                    PropertyTreeRecordValue::new(entry.data().prop_type(), entry.data().value()),
+                )
+            })
             .collect())
     }
 
-    pub fn read_property<R: Read + Seek>(
+    fn read_property<R: PstReader>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_btree: &PstFileReadWriteBlockBTree<Pst>,
+        page_cache: &mut RootBTreePageCache<<Pst as PstFile>::BlockBTree>,
+        value: PropertyTreeRecordValue,
+    ) -> io::Result<PropertyValue> {
+        match value.value() {
+            PropertyValueRecord::Heap(heap_id) => {
+                if u32::from(heap_id) == 0 {
+                    return Ok(PropertyValue::Null);
+                }
+
+                let data = self.tree.heap().find_entry(heap_id)?;
+                let mut cursor = Cursor::new(data);
+                PropertyValueReadWrite::read(&mut cursor, value.prop_type())
+            }
+            PropertyValueRecord::Node(sub_node_id) => {
+                let sub_node =
+                    self.node
+                        .sub_node()
+                        .ok_or(LtpError::PropertySubNodeValueNotFound(u32::from(
+                            sub_node_id,
+                        )))?;
+                let block = block_btree.find_entry(f, sub_node.search_key(), page_cache)?;
+                let sub_node_tree = SubNodeTree::<Pst>::read(f, &block)?;
+                let block = sub_node_tree.find_entry(f, block_btree, sub_node_id, page_cache)?;
+                let block = block_btree.find_entry(f, block.search_key(), page_cache)?;
+                let mut block_cache = self.block_cache.borrow_mut();
+                let data_tree = match block_cache.remove(&block.block().block()) {
+                    Some(data_tree) => data_tree,
+                    None => DataTree::read(f, encoding, &block)?,
+                };
+                let mut data = vec![];
+                let result = data_tree
+                    .reader(f, encoding, block_btree, page_cache, &mut block_cache)
+                    .and_then(|mut r| r.read_to_end(&mut data));
+                block_cache.insert(block.block().block(), data_tree);
+                let _ = result?;
+                let mut cursor = Cursor::new(data);
+                PropertyValueReadWrite::read(&mut cursor, value.prop_type())
+            }
+            small => small
+                .small_value(value.prop_type())
+                .ok_or(LtpError::InvalidSmallPropertyType(value.prop_type()).into()),
+        }
+    }
+}
+
+pub struct UnicodePropertyContext {
+    inner: PropertyContextInner<UnicodePstFile>,
+}
+
+impl UnicodePropertyContext {
+    pub fn new(
+        node: UnicodeNodeBTreeEntry,
+        tree: <UnicodePstFile as PstFile>::PropertyTree,
+    ) -> Self {
+        <Self as PropertyContextReadWrite<UnicodePstFile>>::new(node, tree)
+    }
+
+    pub fn read_property<R: PstReader>(
         &self,
         f: &mut R,
         encoding: NdbCryptMethod,
         block_btree: &UnicodeBlockBTree,
+        page_cache: &mut RootBTreePageCache<UnicodeBlockBTree>,
         value: PropertyTreeRecordValue,
     ) -> io::Result<PropertyValue> {
-        match value.value() {
-            PropertyValueRecord::Heap(heap_id) => {
-                if u32::from(heap_id) == 0 {
-                    return Ok(PropertyValue::Null);
-                }
+        <Self as PropertyContextReadWrite<UnicodePstFile>>::read_property(
+            self,
+            f,
+            encoding,
+            block_btree,
+            page_cache,
+            value,
+        )
+    }
+}
 
-                let data = self
-                    .tree
-                    .heap()
-                    .find_entry(heap_id, f, encoding, block_btree)?;
-                let mut cursor = Cursor::new(data);
-                PropertyValue::read(&mut cursor, value.prop_type())
-            }
-            PropertyValueRecord::Node(sub_node_id) => {
-                let sub_node =
-                    self.node
-                        .sub_node()
-                        .ok_or(LtpError::PropertySubNodeValueNotFound(u32::from(
-                            sub_node_id,
-                        )))?;
-                let block = block_btree.find_entry(f, u64::from(sub_node))?;
-                let sub_node_tree = UnicodeSubNodeTree::read(f, &block)?;
-                let block = sub_node_tree.find_entry(f, block_btree, sub_node_id)?;
-                let block = block_btree.find_entry(f, u64::from(block))?;
-                let data_tree = UnicodeDataTree::read(f, encoding, &block)?;
-                let blocks: Vec<_> = data_tree.blocks(f, encoding, block_btree)?.collect();
-                let data: Vec<_> = blocks
-                    .iter()
-                    .flat_map(|block| block.data())
-                    .copied()
-                    .collect();
-                let mut cursor = Cursor::new(data);
-                PropertyValue::read(&mut cursor, value.prop_type())
-            }
-            small => small
-                .small_value(value.prop_type())
-                .ok_or(LtpError::InvalidSmallPropertyType(value.prop_type()).into()),
-        }
+impl PropertyContext for UnicodePropertyContext {
+    fn tree(&self) -> &PropertyTree {
+        &self.inner.tree
+    }
+
+    fn properties(&self) -> io::Result<BTreeMap<PropertyTreeRecordKey, PropertyTreeRecordValue>> {
+        self.inner.properties()
+    }
+}
+
+impl PropertyContextReadWrite<UnicodePstFile> for UnicodePropertyContext {
+    fn new(node: UnicodeNodeBTreeEntry, tree: <UnicodePstFile as PstFile>::PropertyTree) -> Self {
+        let inner = PropertyContextInner::new(node, tree);
+        Self { inner }
+    }
+
+    fn read_property<R: PstReader>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_btree: &UnicodeBlockBTree,
+        page_cache: &mut RootBTreePageCache<UnicodeBlockBTree>,
+        value: PropertyTreeRecordValue,
+    ) -> io::Result<PropertyValue> {
+        self.inner
+            .read_property(f, encoding, block_btree, page_cache, value)
     }
 }
 
 pub struct AnsiPropertyContext {
-    node: AnsiNodeBTreeEntry,
-    tree: AnsiHeapTree,
+    inner: PropertyContextInner<AnsiPstFile>,
 }
 
 impl AnsiPropertyContext {
-    pub fn new(node: AnsiNodeBTreeEntry, tree: AnsiHeapTree) -> Self {
-        Self { node, tree }
+    pub fn new(node: AnsiNodeBTreeEntry, tree: <AnsiPstFile as PstFile>::PropertyTree) -> Self {
+        <Self as PropertyContextReadWrite<AnsiPstFile>>::new(node, tree)
     }
 
-    pub fn tree(&self) -> &AnsiHeapTree {
-        &self.tree
-    }
-
-    pub fn properties<R: Read + Seek>(
-        &self,
-        f: &mut R,
-        encoding: NdbCryptMethod,
-        block_tree: &AnsiBlockBTree,
-    ) -> io::Result<BTreeMap<PropertyTreeRecordKey, PropertyTreeRecordValue>> {
-        Ok(self
-            .tree
-            .entries(f, encoding, block_tree)?
-            .into_iter()
-            .map(
-                |entry: HeapTreeLeafEntry<PropertyTreeRecordKey, PropertyTreeRecordValue>| {
-                    (
-                        entry.key(),
-                        PropertyTreeRecordValue::new(
-                            entry.data().prop_type(),
-                            entry.data().value(),
-                        ),
-                    )
-                },
-            )
-            .collect())
-    }
-
-    pub fn read_property<R: Read + Seek>(
+    pub fn read_property<R: PstReader>(
         &self,
         f: &mut R,
         encoding: NdbCryptMethod,
         block_btree: &AnsiBlockBTree,
+        page_cache: &mut RootBTreePageCache<AnsiBlockBTree>,
         value: PropertyTreeRecordValue,
     ) -> io::Result<PropertyValue> {
-        match value.value() {
-            PropertyValueRecord::Heap(heap_id) => {
-                if u32::from(heap_id) == 0 {
-                    return Ok(PropertyValue::Null);
-                }
+        <Self as PropertyContextReadWrite<AnsiPstFile>>::read_property(
+            self,
+            f,
+            encoding,
+            block_btree,
+            page_cache,
+            value,
+        )
+    }
+}
 
-                let data = self
-                    .tree
-                    .heap()
-                    .find_entry(heap_id, f, encoding, block_btree)?;
-                let mut cursor = Cursor::new(data);
-                PropertyValue::read(&mut cursor, value.prop_type())
-            }
-            PropertyValueRecord::Node(sub_node_id) => {
-                let sub_node =
-                    self.node
-                        .sub_node()
-                        .ok_or(LtpError::PropertySubNodeValueNotFound(u32::from(
-                            sub_node_id,
-                        )))?;
-                let block = block_btree.find_entry(f, u32::from(sub_node))?;
-                let sub_node_tree = AnsiSubNodeTree::read(f, &block)?;
-                let block = sub_node_tree.find_entry(f, block_btree, sub_node_id)?;
-                let block = block_btree.find_entry(f, u32::from(block))?;
-                let data_tree = AnsiDataTree::read(f, encoding, &block)?;
-                let blocks: Vec<_> = data_tree.blocks(f, encoding, block_btree)?.collect();
-                let data: Vec<_> = blocks
-                    .iter()
-                    .flat_map(|block| block.data())
-                    .copied()
-                    .collect();
-                let mut cursor = Cursor::new(data);
-                PropertyValue::read(&mut cursor, value.prop_type())
-            }
-            small => small
-                .small_value(value.prop_type())
-                .ok_or(LtpError::InvalidSmallPropertyType(value.prop_type()).into()),
-        }
+impl PropertyContext for AnsiPropertyContext {
+    fn tree(&self) -> &PropertyTree {
+        &self.inner.tree
+    }
+
+    fn properties(&self) -> io::Result<BTreeMap<PropertyTreeRecordKey, PropertyTreeRecordValue>> {
+        self.inner.properties()
+    }
+}
+
+impl PropertyContextReadWrite<AnsiPstFile> for AnsiPropertyContext {
+    fn new(node: AnsiNodeBTreeEntry, tree: <AnsiPstFile as PstFile>::PropertyTree) -> Self {
+        let inner = PropertyContextInner::new(node, tree);
+        Self { inner }
+    }
+
+    fn read_property<R: PstReader>(
+        &self,
+        f: &mut R,
+        encoding: NdbCryptMethod,
+        block_btree: &AnsiBlockBTree,
+        page_cache: &mut RootBTreePageCache<AnsiBlockBTree>,
+        value: PropertyTreeRecordValue,
+    ) -> io::Result<PropertyValue> {
+        self.inner
+            .read_property(f, encoding, block_btree, page_cache, value)
     }
 }

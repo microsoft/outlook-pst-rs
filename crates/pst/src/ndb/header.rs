@@ -42,38 +42,9 @@ const NDB_CLIENT_VERSION: u16 = 19;
 const NDB_PLATFORM_CREATE: u8 = 0x01;
 const NDB_PLATFORM_ACCESS: u8 = 0x01;
 const NDB_DEFAULT_NIDS: [u32; 32] = [
-    0x400 << 5,
-    (0x400 << 5) | 0x01,
-    (0x400 << 5) | 0x02,
-    (0x4000 << 5) | 0x03,
-    (0x10000 << 5) | 0x04,
-    (0x400 << 5) | 0x05,
-    (0x400 << 5) | 0x06,
-    (0x400 << 5) | 0x07,
-    (0x8000 << 5) | 0x08,
-    (0x400 << 5) | 0x09,
-    (0x400 << 5) | 0x0A,
-    (0x400 << 5) | 0x0B,
-    (0x400 << 5) | 0x0C,
-    (0x400 << 5) | 0x0D,
-    (0x400 << 5) | 0x0E,
-    (0x400 << 5) | 0x0F,
-    (0x400 << 5) | 0x10,
-    (0x400 << 5) | 0x11,
-    (0x400 << 5) | 0x12,
-    (0x400 << 5) | 0x13,
-    (0x400 << 5) | 0x14,
-    (0x400 << 5) | 0x15,
-    (0x400 << 5) | 0x16,
-    (0x400 << 5) | 0x17,
-    (0x400 << 5) | 0x18,
-    (0x400 << 5) | 0x19,
-    (0x400 << 5) | 0x1A,
-    (0x400 << 5) | 0x1B,
-    (0x400 << 5) | 0x1C,
-    (0x400 << 5) | 0x1D,
-    (0x400 << 5) | 0x1E,
-    (0x400 << 5) | 0x1F,
+    0x400, 0x400, 0x400, 0x4000, 0x10000, 0x400, 0x400, 0x400, 0x8000, 0x400, 0x400, 0x400, 0x400,
+    0x400, 0x400, 0x400, 0x400, 0x400, 0x400, 0x400, 0x400, 0x400, 0x400, 0x400, 0x400, 0x400,
+    0x400, 0x400, 0x400, 0x400, 0x400, 0x400,
 ];
 const NDB_SENTINEL: u8 = 0x80;
 
@@ -113,14 +84,15 @@ where
     fn version(&self) -> NdbVersion;
     fn crypt_method(&self) -> NdbCryptMethod;
     fn next_block(&self) -> <Pst as PstFile>::BlockId;
-    fn next_page(&self) -> <Pst as PstFile>::BlockId;
+    fn next_page(&self) -> <Pst as PstFile>::PageId;
+    fn unique_value(&self) -> u32;
     fn root(&self) -> &<Pst as PstFile>::Root;
     fn root_mut(&mut self) -> &mut <Pst as PstFile>::Root;
 }
 
 #[derive(Clone, Debug)]
 pub struct UnicodeHeader {
-    next_page: UnicodeBlockId,
+    next_page: UnicodePageId,
     unique: u32,
     nids: [u32; 32],
     root: UnicodeRoot,
@@ -139,14 +111,14 @@ pub struct UnicodeHeader {
 impl UnicodeHeader {
     pub fn new(root: UnicodeRoot, crypt_method: NdbCryptMethod) -> Self {
         Self {
-            next_page: Default::default(),
+            next_page: UnicodePageId::from(1),
             unique: 0,
             nids: NDB_DEFAULT_NIDS,
             root,
             free_map: [0xFF; 128],
             free_page_map: [0xFF; 128],
             crypt_method,
-            next_block: Default::default(),
+            next_block: UnicodeBlockId::from(4),
             reserved1: 0,
             reserved2: 0,
             unused1: 0,
@@ -169,8 +141,12 @@ impl Header<UnicodePstFile> for UnicodeHeader {
         self.next_block
     }
 
-    fn next_page(&self) -> <UnicodePstFile as PstFile>::BlockId {
+    fn next_page(&self) -> <UnicodePstFile as PstFile>::PageId {
         self.next_page
+    }
+
+    fn unique_value(&self) -> u32 {
+        self.unique
     }
 
     fn root(&self) -> &<UnicodePstFile as PstFile>::Root {
@@ -253,7 +229,7 @@ impl HeaderReadWrite<UnicodePstFile> for UnicodeHeader {
         let unused1 = cursor.read_u64::<LittleEndian>()?;
 
         // bidNextP
-        let next_page = UnicodeBlockId::read(&mut cursor)?;
+        let next_page = UnicodePageId::read(&mut cursor)?;
 
         // dwUnique
         let unique = cursor.read_u32::<LittleEndian>()?;
@@ -393,12 +369,16 @@ impl HeaderReadWrite<UnicodePstFile> for UnicodeHeader {
     fn first_free_map(&mut self) -> &mut [u8] {
         &mut self.free_map
     }
+
+    fn first_free_page_map(&mut self) -> &mut [u8] {
+        &mut self.free_page_map
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct AnsiHeader {
     next_block: AnsiBlockId,
-    next_page: AnsiBlockId,
+    next_page: AnsiPageId,
     unique: u32,
     nids: [u32; 32],
     root: AnsiRoot,
@@ -414,8 +394,8 @@ pub struct AnsiHeader {
 impl AnsiHeader {
     pub fn new(root: AnsiRoot, crypt_method: NdbCryptMethod) -> Self {
         Self {
-            next_block: Default::default(),
-            next_page: Default::default(),
+            next_block: AnsiBlockId::from(4),
+            next_page: AnsiPageId::from(1),
             unique: 0,
             nids: NDB_DEFAULT_NIDS,
             root,
@@ -442,8 +422,12 @@ impl Header<AnsiPstFile> for AnsiHeader {
         self.next_block
     }
 
-    fn next_page(&self) -> <AnsiPstFile as PstFile>::BlockId {
+    fn next_page(&self) -> <AnsiPstFile as PstFile>::PageId {
         self.next_page
+    }
+
+    fn unique_value(&self) -> u32 {
+        self.unique
     }
 
     fn root(&self) -> &<AnsiPstFile as PstFile>::Root {
@@ -514,7 +498,7 @@ impl HeaderReadWrite<AnsiPstFile> for AnsiHeader {
         let next_block = AnsiBlockId::read(&mut cursor)?;
 
         // bidNextP
-        let next_page = AnsiBlockId::read(&mut cursor)?;
+        let next_page = AnsiPageId::read(&mut cursor)?;
 
         // dwUnique
         let unique = cursor.read_u32::<LittleEndian>()?;
@@ -637,6 +621,10 @@ impl HeaderReadWrite<AnsiPstFile> for AnsiHeader {
 
     fn first_free_map(&mut self) -> &mut [u8] {
         &mut self.free_map
+    }
+
+    fn first_free_page_map(&mut self) -> &mut [u8] {
+        &mut self.free_page_map
     }
 }
 

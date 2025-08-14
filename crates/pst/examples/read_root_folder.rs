@@ -1,13 +1,10 @@
 use clap::Parser;
-use outlook_pst::{messaging::store::UnicodeStore, *};
-use std::rc::Rc;
 
 mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    let pst = UnicodePstFile::open(&args.file).unwrap();
-    let store = UnicodeStore::read(Rc::new(pst)).unwrap();
+    let store = outlook_pst::open_store(&args.file)?;
     let hierarchy_table = store.root_hierarchy_table()?;
     let context = hierarchy_table.context();
 
@@ -29,8 +26,8 @@ fn main() -> anyhow::Result<()> {
 
             println!("  Record: {value:?}");
 
-            let value = store.read_table_column(&hierarchy_table, &value, column.prop_type())?;
-            println!("  Value: {:?}", value);
+            let value = hierarchy_table.read_column(&value, column.prop_type())?;
+            println!("  Value: {value:?}");
         }
     }
 
