@@ -24,7 +24,7 @@ pub struct HeapId(NodeId);
 
 impl HeapId {
     pub fn new(index: u16, block_index: u16) -> LtpResult<Self> {
-        let shifted_index = index.rotate_left(11);
+        let shifted_index = index.rotate_left(5);
         if shifted_index & 0x1F != 0 {
             return Err(LtpError::InvalidHeapIndex(index));
         };
