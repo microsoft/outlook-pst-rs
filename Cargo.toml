@@ -1,21 +1,18 @@
 [workspace]
-members = [
-    "crates/compressed-rtf",
-    "crates/pst",
-]
+members = ["crates/compressed-rtf", "crates/pst"]
 resolver = "2"
 
 [patch.crates-io]
 compressed-rtf = { path = "crates/compressed-rtf" }
 
 [workspace.package]
-authors = [ "Microsoft" ]
+authors = ["Microsoft"]
 edition = "2021"
-rust-version = "1.76"
+rust-version = "1.82"
 repository = "https://github.com/microsoft/outlook-pst-rs"
 license = "MIT"
-keywords = [ "win32", "outlook", "mapi" ]
-categories = [ "os::windows-apis" ]
+keywords = ["win32", "outlook", "mapi"]
+categories = ["os::windows-apis"]
 
 [workspace.dependencies]
 compressed-rtf = "1"
@@ -27,3 +24,5 @@ codepage-strings = "1"
 crossterm = "0.29"
 ratatui = "0.29"
 thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = "0.3"

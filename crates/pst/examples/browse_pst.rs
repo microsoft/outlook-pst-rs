@@ -11,21 +11,20 @@ use ratatui::{
     widgets::{Block, Borders, List, ListState, Paragraph, StatefulWidget, Widget},
     DefaultTerminal, Frame,
 };
-use std::{cell::OnceCell, io, rc::Rc};
+use std::{cell::OnceCell, io, path::Path, rc::Rc};
 
 use outlook_pst::{
     ltp::{
         prop_context::PropertyValue,
-        table_context::{AnsiTableContext, TableRowData},
+        table_context::{TableContext, TableRowData},
     },
     messaging::{
-        attachment::AnsiAttachment,
-        folder::AnsiFolder,
-        message::AnsiMessage,
-        store::{AnsiStore, EntryId},
+        attachment::Attachment as PstAttachment,
+        folder::Folder as PstFolder,
+        message::Message as PstMessage,
+        store::{EntryId, Store},
     },
     ndb::node_id::NodeId,
-    *,
 };
 
 mod args;
@@ -34,25 +33,25 @@ mod encoding;
 struct IpmSubTree {
     display_name: OnceCell<anyhow::Result<String>>,
     root_folders: OnceCell<anyhow::Result<Vec<Folder>>>,
-    pst_file: Rc<AnsiPstFile>,
-    pst_store: OnceCell<anyhow::Result<Rc<AnsiStore>>>,
-    pst_folders: OnceCell<anyhow::Result<Vec<Rc<AnsiFolder>>>>,
+    pst_store: Rc<dyn Store>,
+    pst_folders: OnceCell<anyhow::Result<Vec<Rc<dyn PstFolder>>>>,
 }
 
 impl IpmSubTree {
-    fn new(pst: AnsiPstFile) -> Self {
-        Self {
+    fn new(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let pst_store = outlook_pst::open_store(path)?;
+
+        Ok(Self {
             display_name: Default::default(),
             root_folders: Default::default(),
-            pst_file: Rc::new(pst),
-            pst_store: Default::default(),
+            pst_store,
             pst_folders: Default::default(),
-        }
+        })
     }
 
     fn display_name(&self) -> String {
         self.display_name
-            .get_or_init(|| Ok(self.store()?.properties().display_name()?))
+            .get_or_init(|| Ok(self.store().properties().display_name()?))
             .as_ref()
             .map_err(|err| anyhow::anyhow!("{err:?}"))
             .map(String::as_str)
@@ -60,12 +59,8 @@ impl IpmSubTree {
             .to_string()
     }
 
-    fn store(&self) -> anyhow::Result<Rc<AnsiStore>> {
-        self.pst_store
-            .get_or_init(|| Ok(AnsiStore::read(self.pst_file.clone())?))
-            .as_ref()
-            .map(Clone::clone)
-            .map_err(|err| anyhow::anyhow!("{err:?}"))
+    fn store(&self) -> Rc<dyn Store> {
+        self.pst_store.clone()
     }
 
     fn root_folders(&self) -> anyhow::Result<&[Folder]> {
@@ -75,8 +70,8 @@ impl IpmSubTree {
                 let mut root_folders = self
                     .pst_folders
                     .get_or_init(|| {
-                        let ipm_sub_tree = self.store()?.properties().ipm_sub_tree_entry_id()?;
-                        let ipm_subtree_folder = AnsiFolder::read(self.store()?, &ipm_sub_tree)?;
+                        let ipm_sub_tree = self.store().properties().ipm_sub_tree_entry_id()?;
+                        let ipm_subtree_folder = self.store().open_folder(&ipm_sub_tree)?;
                         let hierarchy_table = ipm_subtree_folder.hierarchy_table().ok_or(
                             anyhow::anyhow!("No hierarchy table found for the IPM Subtree."),
                         )?;
@@ -85,15 +80,15 @@ impl IpmSubTree {
                             .rows_matrix()
                             .map(|row| {
                                 let node = NodeId::from(u32::from(row.id()));
-                                let entry_id = self.store()?.properties().make_entry_id(node)?;
-                                Ok(AnsiFolder::read(self.store()?, &entry_id)?)
+                                let entry_id = self.store().properties().make_entry_id(node)?;
+                                Ok(self.store().open_folder(&entry_id)?)
                             })
                             .collect()
                     })
                     .as_ref()
                     .map_err(|err| anyhow::anyhow!("{err:?}"))?
                     .iter()
-                    .cloned()
+                    .map(Clone::clone)
                     .map(Folder::new)
                     .collect::<Result<Vec<_>, _>>()?;
                 root_folders.sort_by(|a, b| a.name.cmp(&b.name));
@@ -110,12 +105,12 @@ struct Folder {
     name: String,
     sub_folders: OnceCell<anyhow::Result<Vec<Folder>>>,
     messages: OnceCell<anyhow::Result<Vec<Message>>>,
-    pst_folder: Rc<AnsiFolder>,
-    pst_sub_folders: OnceCell<anyhow::Result<Vec<Rc<AnsiFolder>>>>,
+    pst_folder: Rc<dyn PstFolder>,
+    pst_sub_folders: OnceCell<anyhow::Result<Vec<Rc<dyn PstFolder>>>>,
 }
 
 impl Folder {
-    fn new(folder: Rc<AnsiFolder>) -> anyhow::Result<Self> {
+    fn new(folder: Rc<dyn PstFolder>) -> anyhow::Result<Self> {
         let properties = folder.properties();
         let name = properties.display_name()?.to_string();
 
@@ -145,17 +140,14 @@ impl Folder {
                                     let node = NodeId::from(u32::from(row.id()));
                                     let entry_id =
                                         self.pst_folder.store().properties().make_entry_id(node)?;
-                                    Ok(AnsiFolder::read(
-                                        self.pst_folder.store().clone(),
-                                        &entry_id,
-                                    )?)
+                                    Ok(self.pst_folder.store().open_folder(&entry_id)?)
                                 })
                                 .collect()
                         })
                         .as_ref()
                         .map_err(|err| anyhow::anyhow!("{err:?}"))?
                         .iter()
-                        .cloned()
+                        .map(Clone::clone)
                         .map(Folder::new)
                         .collect::<Result<Vec<_>, _>>()?;
                 sub_folders.sort_by(|a, b| a.name.cmp(&b.name));
@@ -176,7 +168,13 @@ impl Folder {
                     .ok_or(anyhow::anyhow!("No contents table found for the folder."))?;
                 contents_table
                     .rows_matrix()
-                    .map(|row| Message::new(self.pst_folder.store().clone(), contents_table, row))
+                    .map(|row| {
+                        Message::new(
+                            self.pst_folder.store().clone(),
+                            contents_table.as_ref(),
+                            row,
+                        )
+                    })
                     .collect::<anyhow::Result<Vec<_>>>()
             })
             .as_ref()
@@ -186,7 +184,7 @@ impl Folder {
 }
 
 enum MessageOrRow {
-    Message(Rc<AnsiMessage>),
+    Message(Rc<dyn PstMessage>),
     Row {
         subject: Option<String>,
         received_time: i64,
@@ -199,16 +197,16 @@ struct Message {
     recipients: OnceCell<Vec<Recipient>>,
     body: OnceCell<anyhow::Result<Option<Body>>>,
     attachments: OnceCell<anyhow::Result<Vec<Attachment>>>,
-    pst_store: Rc<AnsiStore>,
-    pst_message: OnceCell<anyhow::Result<Rc<AnsiMessage>>>,
-    pst_full_message: OnceCell<anyhow::Result<Rc<AnsiMessage>>>,
-    pst_attachments: OnceCell<anyhow::Result<Vec<Rc<AnsiAttachment>>>>,
+    pst_store: Rc<dyn Store>,
+    pst_message: OnceCell<anyhow::Result<Rc<dyn PstMessage>>>,
+    pst_full_message: OnceCell<anyhow::Result<Rc<dyn PstMessage>>>,
+    pst_attachments: OnceCell<anyhow::Result<Vec<Rc<dyn PstAttachment>>>>,
 }
 
 impl Message {
     fn new(
-        store: Rc<AnsiStore>,
-        table: &AnsiTableContext,
+        store: Rc<dyn Store>,
+        table: &dyn TableContext,
         row: &TableRowData,
     ) -> anyhow::Result<Self> {
         let entry_id = store
@@ -231,12 +229,8 @@ impl Message {
                 let subject = columns[subject_col]
                     .as_ref()
                     .and_then(|value| {
-                        store
-                            .read_table_column(
-                                table,
-                                value,
-                                context.columns()[subject_col].prop_type(),
-                            )
+                        table
+                            .read_column(value, context.columns()[subject_col].prop_type())
                             .ok()
                     })
                     .as_ref()
@@ -245,12 +239,8 @@ impl Message {
                 let received_time = columns[received_col]
                     .as_ref()
                     .and_then(|value| {
-                        store
-                            .read_table_column(
-                                table,
-                                value,
-                                context.columns()[received_col].prop_type(),
-                            )
+                        table
+                            .read_column(value, context.columns()[received_col].prop_type())
                             .ok()
                     })
                     .and_then(|value| match value {
@@ -275,11 +265,8 @@ impl Message {
                 }
             }
             _ => {
-                let message = MessageOrRow::Message(AnsiMessage::read(
-                    store.clone(),
-                    &entry_id,
-                    Some(&[0x0037, 0x0E06]),
-                )?);
+                let message =
+                    MessageOrRow::Message(store.open_message(&entry_id, Some(&[0x0037, 0x0E06]))?);
 
                 Self {
                     entry_id,
@@ -296,17 +283,15 @@ impl Message {
         })
     }
 
-    fn message(&self) -> anyhow::Result<Rc<AnsiMessage>> {
+    fn message(&self) -> anyhow::Result<Rc<dyn PstMessage>> {
         match &self.message {
             MessageOrRow::Message(message) => Ok(message.clone()),
             MessageOrRow::Row { .. } => self
                 .pst_message
                 .get_or_init(|| {
-                    Ok(AnsiMessage::read(
-                        self.pst_store.clone(),
-                        &self.entry_id,
-                        Some(&[0x0037, 0x0E06]),
-                    )?)
+                    Ok(self
+                        .pst_store
+                        .open_message(&self.entry_id, Some(&[0x0037, 0x0E06]))?)
                 })
                 .as_ref()
                 .map(Clone::clone)
@@ -314,15 +299,9 @@ impl Message {
         }
     }
 
-    fn full_message(&self) -> anyhow::Result<Rc<AnsiMessage>> {
+    fn full_message(&self) -> anyhow::Result<Rc<dyn PstMessage>> {
         self.pst_full_message
-            .get_or_init(|| {
-                Ok(AnsiMessage::read(
-                    self.pst_store.clone(),
-                    &self.entry_id,
-                    None,
-                )?)
-            })
+            .get_or_init(|| Ok(self.pst_store.open_message(&self.entry_id, None)?))
             .as_ref()
             .map(Clone::clone)
             .map_err(|err| anyhow::anyhow!("{err:?}"))
@@ -380,9 +359,7 @@ impl Message {
                                 }
                             })
                             .and_then(|(value, prop_type)| {
-                                self.pst_store
-                                    .read_table_column(recipient_table, value?, prop_type)
-                                    .ok()
+                                recipient_table.read_column(value?, prop_type).ok()
                             })? {
                             PropertyValue::Integer32(value) => value,
                             _ => return None,
@@ -397,9 +374,7 @@ impl Message {
                                 }
                             })
                             .and_then(|(value, prop_type)| {
-                                self.pst_store
-                                    .read_table_column(recipient_table, value?, prop_type)
-                                    .ok()
+                                recipient_table.read_column(value?, prop_type).ok()
                             })? {
                             PropertyValue::String8(value) => value.to_string(),
                             PropertyValue::Unicode(value) => value.to_string(),
@@ -697,8 +672,7 @@ impl StatefulWidget for &App {
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    let pst = AnsiPstFile::open(&args.file).unwrap();
-    let ipm_sub_tree = IpmSubTree::new(pst);
+    let ipm_sub_tree = IpmSubTree::new(&args.file)?;
 
     let mut terminal = ratatui::init();
     let app_result = App::new(ipm_sub_tree).run(&mut terminal);

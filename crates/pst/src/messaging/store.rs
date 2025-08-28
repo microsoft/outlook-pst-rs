@@ -2,30 +2,31 @@
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::{
+    cell::OnceCell,
     collections::BTreeMap,
     fmt::Debug,
     io::{self, Read, Write},
-    rc::Rc,
+    rc::{Rc, Weak},
 };
 
-use super::{read_write::*, *};
+use super::{folder::*, message::*, read_write::*, *};
 use crate::{
     ltp::{
-        heap::{AnsiHeapNode, UnicodeHeapNode},
-        prop_context::{AnsiPropertyContext, PropertyValue, UnicodePropertyContext},
+        heap::HeapNode,
+        prop_context::{PropertyContext, PropertyValue},
         prop_type::PropertyType,
-        table_context::{AnsiTableContext, TableRowColumnValue, UnicodeTableContext},
-        tree::{AnsiHeapTree, UnicodeHeapTree},
+        read_write::*,
+        table_context::TableContext,
     },
     ndb::{
-        block::{AnsiDataTree, UnicodeDataTree},
+        block_id::BlockId,
         header::Header,
         node_id::{NodeId, NodeIdType, NID_MESSAGE_STORE, NID_ROOT_FOLDER},
         page::*,
-        read_write::NodeIdReadWrite,
+        read_write::*,
         root::Root,
     },
-    AnsiPstFile, PstFile, UnicodePstFile,
+    *,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -43,7 +44,7 @@ impl StoreRecordKey {
     }
 }
 
-impl StoreReadWrite for StoreRecordKey {
+impl StoreKeyReadWrite for StoreRecordKey {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let mut record_key = [0; 16];
         f.read_exact(&mut record_key)?;
@@ -104,7 +105,7 @@ impl EntryId {
     }
 }
 
-impl StoreReadWrite for EntryId {
+impl StoreKeyReadWrite for EntryId {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         // rgbFlags
         let flags = f.read_u32::<LittleEndian>()?;
@@ -136,6 +137,25 @@ impl StoreReadWrite for EntryId {
 impl From<&EntryId> for NodeId {
     fn from(value: &EntryId) -> Self {
         value.node_id
+    }
+}
+
+impl TryFrom<&[u8]> for EntryId {
+    type Error = io::Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let mut reader = value;
+        EntryId::read(&mut reader)
+    }
+}
+
+impl TryFrom<&EntryId> for Vec<u8> {
+    type Error = io::Error;
+
+    fn try_from(value: &EntryId) -> Result<Self, Self::Error> {
+        let mut result = vec![];
+        value.write(&mut result)?;
+        Ok(result)
     }
 }
 
@@ -236,27 +256,69 @@ impl StoreProperties {
     }
 }
 
-pub struct UnicodeStore {
-    pst: Rc<UnicodePstFile>,
-    node_btree: UnicodeNodeBTree,
-    block_btree: UnicodeBlockBTree,
-    properties: StoreProperties,
+pub trait Store {
+    fn properties(&self) -> &StoreProperties;
+    fn root_hierarchy_table(&self) -> io::Result<Rc<dyn TableContext>>;
+    fn unique_value(&self) -> u32;
+    fn open_folder(&self, entry_id: &EntryId) -> io::Result<Rc<dyn Folder>>;
+    fn open_message(
+        &self,
+        entry_id: &EntryId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<dyn Message>>;
+    fn named_property_map(&self) -> io::Result<Rc<dyn NamedPropertyMap>>;
+    fn search_update_queue(&self) -> io::Result<Rc<dyn SearchUpdateQueue>>;
 }
 
-impl UnicodeStore {
-    pub fn pst(&self) -> &Rc<UnicodePstFile> {
-        &self.pst
-    }
+struct StoreInner<Pst>
+where
+    Pst: PstFile + PstFileLock<Pst> + 'static,
+{
+    pst: Rc<Pst>,
+    node_btree: PstFileReadWriteNodeBTree<Pst>,
+    block_btree: PstFileReadWriteBlockBTree<Pst>,
+    properties: StoreProperties,
+    store: Weak<Pst::Store>,
+    root_hierarchy_table: OnceCell<io::Result<Rc<dyn TableContext>>>,
+}
 
-    pub fn node_btree(&self) -> &UnicodeNodeBTree {
-        &self.node_btree
-    }
-
-    pub fn block_btree(&self) -> &UnicodeBlockBTree {
-        &self.block_btree
-    }
-
-    pub fn read(pst: Rc<UnicodePstFile>) -> io::Result<Rc<Self>> {
+impl<Pst> StoreInner<Pst>
+where
+    Pst: PstFile + PstFileLock<Pst>,
+    <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+    <Pst as PstFile>::NodeBTreeEntry: NodeBTreeEntryReadWrite,
+    <Pst as PstFile>::NodeBTree: RootBTreeReadWrite,
+    <<Pst as PstFile>::NodeBTree as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePageReadWrite<
+            Pst,
+            <Pst as PstFile>::NodeBTreeEntry,
+            <<Pst as PstFile>::NodeBTree as RootBTree>::LeafPage,
+        >,
+    <<<Pst as PstFile>::NodeBTree as RootBTree>::IntermediatePage as BTreePage>::Entry:
+        BTreePageEntryReadWrite,
+    <<Pst as PstFile>::NodeBTree as RootBTree>::LeafPage: RootBTreeLeafPageReadWrite<Pst>,
+    <Pst as PstFile>::BlockBTreeEntry: BlockBTreeEntryReadWrite,
+    <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePageReadWrite<
+            Pst,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+        >,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+        RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+    <Pst as PstFile>::BlockTrailer: BlockTrailerReadWrite,
+    <Pst as PstFile>::HeapNode: HeapNodeReadWrite<Pst>,
+    <Pst as PstFile>::PropertyTree: HeapTreeReadWrite<Pst>,
+    <Pst as PstFile>::TableContext: TableContextReadWrite<Pst>,
+    <Pst as PstFile>::PropertyContext: PropertyContextReadWrite<Pst>,
+    <Pst as PstFile>::Folder: FolderReadWrite<Pst>,
+    <Pst as PstFile>::Message: MessageReadWrite<Pst>,
+    <Pst as PstFile>::NamedPropertyMap: NamedPropertyMapReadWrite<Pst>,
+    <Pst as PstFile>::SearchUpdateQueue: SearchUpdateQueueReadWrite<Pst>,
+{
+    fn read(pst: Rc<Pst>) -> io::Result<Self> {
         let header = pst.header();
         let root = header.root();
 
@@ -268,23 +330,38 @@ impl UnicodeStore {
             let file = &mut *file;
 
             let encoding = header.crypt_method();
-            let node_btree = UnicodeNodeBTree::read(file, *root.node_btree())?;
-            let block_btree = UnicodeBlockBTree::read(file, *root.block_btree())?;
+            let node_btree = <<Pst as PstFile>::NodeBTree as RootBTreeReadWrite>::read(
+                file,
+                *root.node_btree(),
+            )?;
+            let block_btree = <<Pst as PstFile>::BlockBTree as RootBTreeReadWrite>::read(
+                file,
+                *root.block_btree(),
+            )?;
 
-            let node = node_btree.find_entry(file, u64::from(u32::from(NID_MESSAGE_STORE)))?;
+            let mut page_cache = pst.node_cache();
+            let node_key: <Pst as PstFile>::BTreeKey = u32::from(NID_MESSAGE_STORE).into();
+            let node = node_btree.find_entry(file, node_key, &mut page_cache)?;
+
+            let mut page_cache = pst.block_cache();
             let data = node.data();
-            let block = block_btree.find_entry(file, u64::from(data))?;
-            let heap = UnicodeHeapNode::new(UnicodeDataTree::read(file, encoding, &block)?);
-            let header = heap.header(file, encoding, &block_btree)?;
+            let heap = <<Pst as PstFile>::HeapNode as HeapNodeReadWrite<Pst>>::read(
+                file,
+                &block_btree,
+                &mut page_cache,
+                encoding,
+                data.search_key(),
+            )?;
+            let header = heap.header()?;
 
-            let tree = UnicodeHeapTree::new(heap, header.user_root());
-            let prop_context = UnicodePropertyContext::new(node, tree);
+            let tree = <Pst as PstFile>::PropertyTree::new(heap, header.user_root());
+            let prop_context = <Pst as PstFile>::PropertyContext::new(node, tree);
             let properties = prop_context
-                .properties(file, encoding, &block_btree)?
+                .properties()?
                 .into_iter()
                 .map(|(prop_id, record)| {
                     prop_context
-                        .read_property(file, encoding, &block_btree, record)
+                        .read_property(file, encoding, &block_btree, &mut page_cache, record)
                         .map(|value| (prop_id, value))
                 })
                 .collect::<io::Result<BTreeMap<_, _>>>()?;
@@ -293,169 +370,231 @@ impl UnicodeStore {
             (node_btree, block_btree, properties)
         };
 
-        Ok(Rc::new(Self {
+        Ok(Self {
             pst,
             node_btree,
             block_btree,
             properties,
-        }))
+            store: Default::default(),
+            root_hierarchy_table: Default::default(),
+        })
     }
 
-    pub fn properties(&self) -> &StoreProperties {
-        &self.properties
-    }
+    fn root_hierarchy_table(&self) -> io::Result<Rc<dyn TableContext>> {
+        let hierarchy_table =
+            self.root_hierarchy_table
+                .get_or_init(|| {
+                    let store = self.store.upgrade().ok_or(
+                        MessagingError::StoreRootHierarchyTableFailed(
+                            "Store has been dropped".to_string(),
+                        ),
+                    )?;
+                    let mut file = self
+                        .pst
+                        .reader()
+                        .lock()
+                        .map_err(|_| MessagingError::FailedToLockFile)?;
 
-    pub fn root_hierarchy_table(&self) -> io::Result<UnicodeTableContext> {
-        let header = self.pst.header();
-        let root = header.root();
+                    let file = &mut *file;
+                    let node_id = NodeId::new(NodeIdType::HierarchyTable, NID_ROOT_FOLDER.index())?;
+                    let mut page_cache = self.pst.node_cache();
+                    let node_key: <Pst as PstFile>::BTreeKey = u32::from(node_id).into();
+                    let node = self
+                        .node_btree
+                        .find_entry(file, node_key, &mut page_cache)?;
 
-        let hierarchy_table = {
-            let mut file = self
-                .pst
-                .reader()
-                .lock()
-                .map_err(|_| MessagingError::FailedToLockFile)?;
-            let file = &mut *file;
+                    <<Pst as PstFile>::TableContext as TableContextReadWrite<Pst>>::read(
+                        store.clone(),
+                        node,
+                    )
+                })
+                .as_ref()
+                .map_err(|err| format!("{err:?}"))
+                .cloned()
+                .map_err(MessagingError::StoreRootHierarchyTableFailed)?;
 
-            let encoding = header.crypt_method();
-            let node_btree = UnicodeNodeBTree::read(file, *root.node_btree())?;
-            let block_btree = UnicodeBlockBTree::read(file, *root.block_btree())?;
-
-            let node_id = NodeId::new(NodeIdType::HierarchyTable, NID_ROOT_FOLDER.index())?;
-            let node = node_btree.find_entry(file, u64::from(u32::from(node_id)))?;
-            UnicodeTableContext::read(file, encoding, &block_btree, node)?
-        };
         Ok(hierarchy_table)
     }
 
-    pub fn read_table_column(
+    fn open_folder(&self, entry_id: &EntryId) -> io::Result<Rc<dyn Folder>> {
+        let store = self.store.upgrade().ok_or(MessagingError::StoreOpenFolder(
+            "Store has been dropped".to_string(),
+        ))?;
+        Ok(<<Pst as PstFile>::Folder as FolderReadWrite<Pst>>::read(
+            store, entry_id,
+        )?)
+    }
+
+    fn open_message(
         &self,
-        table: &UnicodeTableContext,
-        value: &TableRowColumnValue,
-        prop_type: PropertyType,
-    ) -> io::Result<PropertyValue> {
-        let mut file = self
-            .pst
-            .reader()
-            .lock()
-            .map_err(|_| MessagingError::FailedToLockFile)?;
-        let file = &mut *file;
+        entry_id: &EntryId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<dyn Message>> {
+        let store = self.store.upgrade().ok_or(MessagingError::StoreOpenFolder(
+            "Store has been dropped".to_string(),
+        ))?;
+        Ok(<<Pst as PstFile>::Message as MessageReadWrite<Pst>>::read(
+            store, entry_id, prop_ids,
+        )?)
+    }
 
-        let encoding = self.pst.header().crypt_method();
-        let block_btree = self.block_btree();
+    fn named_property_map(&self) -> io::Result<Rc<dyn NamedPropertyMap>> {
+        let store = self
+            .store
+            .upgrade()
+            .ok_or(MessagingError::StoreNamedPropertyMap(
+                "Store has been dropped".to_string(),
+            ))?;
+        Ok(<<Pst as PstFile>::NamedPropertyMap as NamedPropertyMapReadWrite<Pst>>::read(store)?)
+    }
 
-        table.read_column(file, encoding, block_btree, value, prop_type)
+    fn search_update_queue(&self) -> io::Result<Rc<dyn SearchUpdateQueue>> {
+        let store = self
+            .store
+            .upgrade()
+            .ok_or(MessagingError::StoreSearchUpdateQueue(
+                "Store has been dropped".to_string(),
+            ))?;
+        Ok(<<Pst as PstFile>::SearchUpdateQueue as SearchUpdateQueueReadWrite<Pst>>::read(store)?)
+    }
+
+    fn unique_value(&self) -> u32 {
+        self.pst.header().unique_value()
+    }
+}
+
+pub struct UnicodeStore {
+    inner: StoreInner<UnicodePstFile>,
+}
+
+impl UnicodeStore {
+    pub fn read(pst: Rc<UnicodePstFile>) -> io::Result<Rc<Self>> {
+        let inner = StoreInner::read(pst)?;
+        Ok(Rc::new_cyclic(|store| Self::new_cyclic(inner, store)))
+    }
+
+    fn new_cyclic(inner: StoreInner<UnicodePstFile>, store: &Weak<Self>) -> Self {
+        Self {
+            inner: StoreInner {
+                store: store.clone(),
+                ..inner
+            },
+        }
+    }
+}
+
+impl Store for UnicodeStore {
+    fn properties(&self) -> &StoreProperties {
+        &self.inner.properties
+    }
+
+    fn root_hierarchy_table(&self) -> io::Result<Rc<dyn TableContext>> {
+        self.inner.root_hierarchy_table()
+    }
+
+    fn unique_value(&self) -> u32 {
+        self.inner.unique_value()
+    }
+
+    fn open_folder(&self, entry_id: &EntryId) -> io::Result<Rc<dyn Folder>> {
+        self.inner.open_folder(entry_id)
+    }
+
+    fn open_message(
+        &self,
+        entry_id: &EntryId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<dyn Message>> {
+        self.inner.open_message(entry_id, prop_ids)
+    }
+
+    fn named_property_map(&self) -> io::Result<Rc<dyn NamedPropertyMap>> {
+        self.inner.named_property_map()
+    }
+
+    fn search_update_queue(&self) -> io::Result<Rc<dyn SearchUpdateQueue>> {
+        self.inner.search_update_queue()
+    }
+}
+
+impl StoreReadWrite<UnicodePstFile> for UnicodeStore {
+    fn pst(&self) -> &UnicodePstFile {
+        self.inner.pst.as_ref()
+    }
+
+    fn node_btree(&self) -> &PstFileReadWriteNodeBTree<UnicodePstFile> {
+        &self.inner.node_btree
+    }
+
+    fn block_btree(&self) -> &PstFileReadWriteBlockBTree<UnicodePstFile> {
+        &self.inner.block_btree
     }
 }
 
 pub struct AnsiStore {
-    pst: Rc<AnsiPstFile>,
-    node_btree: AnsiNodeBTree,
-    block_btree: AnsiBlockBTree,
-    properties: StoreProperties,
+    inner: StoreInner<AnsiPstFile>,
 }
 
 impl AnsiStore {
-    pub fn pst(&self) -> &Rc<AnsiPstFile> {
-        &self.pst
-    }
-
-    pub fn node_btree(&self) -> &AnsiNodeBTree {
-        &self.node_btree
-    }
-
-    pub fn block_btree(&self) -> &AnsiBlockBTree {
-        &self.block_btree
-    }
-
     pub fn read(pst: Rc<AnsiPstFile>) -> io::Result<Rc<Self>> {
-        let header = pst.header();
-        let root = header.root();
-
-        let (node_btree, block_btree, properties) = {
-            let mut file = pst
-                .reader()
-                .lock()
-                .map_err(|_| MessagingError::FailedToLockFile)?;
-            let file = &mut *file;
-
-            let encoding = header.crypt_method();
-            let node_btree = AnsiNodeBTree::read(file, *root.node_btree())?;
-            let block_btree = AnsiBlockBTree::read(file, *root.block_btree())?;
-
-            let node = node_btree.find_entry(file, u32::from(NID_MESSAGE_STORE))?;
-            let data = node.data();
-            let block = block_btree.find_entry(file, u32::from(data))?;
-            let heap = AnsiHeapNode::new(AnsiDataTree::read(file, encoding, &block)?);
-            let header = heap.header(file, encoding, &block_btree)?;
-
-            let tree = AnsiHeapTree::new(heap, header.user_root());
-            let prop_context = AnsiPropertyContext::new(node, tree);
-            let properties = prop_context
-                .properties(file, encoding, &block_btree)?
-                .into_iter()
-                .map(|(prop_id, record)| {
-                    prop_context
-                        .read_property(file, encoding, &block_btree, record)
-                        .map(|value| (prop_id, value))
-                })
-                .collect::<io::Result<BTreeMap<_, _>>>()?;
-            let properties = StoreProperties { properties };
-
-            (node_btree, block_btree, properties)
-        };
-
-        Ok(Rc::new(Self {
-            pst,
-            node_btree,
-            block_btree,
-            properties,
-        }))
+        let inner = StoreInner::read(pst)?;
+        Ok(Rc::new_cyclic(|store| Self::new_cyclic(inner, store)))
     }
 
-    pub fn properties(&self) -> &StoreProperties {
-        &self.properties
+    fn new_cyclic(inner: StoreInner<AnsiPstFile>, store: &Weak<Self>) -> Self {
+        Self {
+            inner: StoreInner {
+                store: store.clone(),
+                ..inner
+            },
+        }
+    }
+}
+
+impl Store for AnsiStore {
+    fn properties(&self) -> &StoreProperties {
+        &self.inner.properties
     }
 
-    pub fn root_hierarchy_table(&self) -> io::Result<AnsiTableContext> {
-        let header = self.pst.header();
-        let root = header.root();
-
-        let hierarchy_table = {
-            let mut file = self
-                .pst
-                .reader()
-                .lock()
-                .map_err(|_| MessagingError::FailedToLockFile)?;
-            let file = &mut *file;
-
-            let encoding = header.crypt_method();
-            let node_btree = AnsiNodeBTree::read(file, *root.node_btree())?;
-            let block_btree = AnsiBlockBTree::read(file, *root.block_btree())?;
-
-            let node_id = NodeId::new(NodeIdType::HierarchyTable, NID_ROOT_FOLDER.index())?;
-            let node = node_btree.find_entry(file, u32::from(node_id))?;
-            AnsiTableContext::read(file, encoding, &block_btree, node)?
-        };
-        Ok(hierarchy_table)
+    fn root_hierarchy_table(&self) -> io::Result<Rc<dyn TableContext>> {
+        self.inner.root_hierarchy_table()
     }
 
-    pub fn read_table_column(
+    fn unique_value(&self) -> u32 {
+        self.inner.unique_value()
+    }
+
+    fn open_folder(&self, entry_id: &EntryId) -> io::Result<Rc<dyn Folder>> {
+        self.inner.open_folder(entry_id)
+    }
+
+    fn open_message(
         &self,
-        table: &AnsiTableContext,
-        value: &TableRowColumnValue,
-        prop_type: PropertyType,
-    ) -> io::Result<PropertyValue> {
-        let mut file = self
-            .pst
-            .reader()
-            .lock()
-            .map_err(|_| MessagingError::FailedToLockFile)?;
-        let file = &mut *file;
+        entry_id: &EntryId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<dyn Message>> {
+        self.inner.open_message(entry_id, prop_ids)
+    }
 
-        let encoding = self.pst.header().crypt_method();
-        let block_btree = self.block_btree();
+    fn named_property_map(&self) -> io::Result<Rc<dyn NamedPropertyMap>> {
+        self.inner.named_property_map()
+    }
 
-        table.read_column(file, encoding, block_btree, value, prop_type)
+    fn search_update_queue(&self) -> io::Result<Rc<dyn SearchUpdateQueue>> {
+        self.inner.search_update_queue()
+    }
+}
+
+impl StoreReadWrite<AnsiPstFile> for AnsiStore {
+    fn pst(&self) -> &AnsiPstFile {
+        self.inner.pst.as_ref()
+    }
+
+    fn node_btree(&self) -> &PstFileReadWriteNodeBTree<AnsiPstFile> {
+        &self.inner.node_btree
+    }
+
+    fn block_btree(&self) -> &PstFileReadWriteBlockBTree<AnsiPstFile> {
+        &self.inner.block_btree
     }
 }

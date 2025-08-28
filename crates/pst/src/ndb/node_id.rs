@@ -57,6 +57,19 @@ pub enum NodeIdType {
     ListsTablesProperties = 0x1F,
 }
 
+impl TryFrom<NodeIdType> for usize {
+    type Error = NdbError;
+
+    fn try_from(value: NodeIdType) -> Result<Self, Self::Error> {
+        let index = value as u8;
+        if index > 0x1F {
+            Err(NdbError::InvalidNodeIdType(index))
+        } else {
+            Ok(usize::from(index))
+        }
+    }
+}
+
 impl TryFrom<u8> for NodeIdType {
     type Error = NdbError;
 

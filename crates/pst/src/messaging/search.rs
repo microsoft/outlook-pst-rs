@@ -1,17 +1,25 @@
 //! ## [Search](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/3991391e-6cf6-4c97-8b9e-fc25bee7391b)
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{self, Cursor, Read, Seek, Write};
+use std::{
+    io::{self, Cursor, Read, Write},
+    marker::PhantomData,
+    rc::Rc,
+};
 
 use super::{read_write::*, *};
-use crate::ndb::{
-    block::{AnsiDataTree, UnicodeDataTree},
-    header::NdbCryptMethod,
-    node_id::NodeId,
-    page::{
-        AnsiBlockBTree, AnsiNodeBTreeEntry, NodeBTreeEntry, UnicodeBlockBTree,
-        UnicodeNodeBTreeEntry,
+use crate::{
+    messaging::store::{AnsiStore, UnicodeStore},
+    ndb::{
+        block::{DataTree, IntermediateTreeBlock},
+        block_id::BlockId,
+        header::Header,
+        node_id::{NodeId, NID_SEARCH_MANAGEMENT_QUEUE},
+        page::{BTreePage, NodeBTreeEntry, RootBTree},
+        read_write::*,
+        root::Root,
     },
+    AnsiPstFile, PstFile, UnicodePstFile,
 };
 
 /// `wFlags`
@@ -208,6 +216,16 @@ impl From<&SearchUpdateData> for SearchUpdateType {
 pub struct SearchUpdate {
     flags: u16,
     data: Option<SearchUpdateData>,
+}
+
+impl SearchUpdate {
+    pub fn flags(&self) -> u16 {
+        self.flags
+    }
+
+    pub fn data(&self) -> Option<&SearchUpdateData> {
+        self.data.as_ref()
+    }
 }
 
 impl SearchReadWrite for SearchUpdate {
@@ -420,108 +438,159 @@ impl SearchReadWrite for SearchUpdate {
     }
 }
 
-pub struct UnicodeSearchUpdateQueue {
-    updates: Vec<SearchUpdate>,
+const SEARCH_UPDATE_SIZE: u32 = 20;
+
+pub trait SearchUpdateQueue {
+    fn updates(&self) -> &[SearchUpdate];
 }
 
-impl UnicodeSearchUpdateQueue {
-    pub fn read<R: Read + Seek>(
-        f: &mut R,
-        encoding: NdbCryptMethod,
-        block_btree: &UnicodeBlockBTree,
-        node: UnicodeNodeBTreeEntry,
-    ) -> io::Result<Self> {
+struct SearchUpdateQueueInner<Pst>
+where
+    Pst: PstFile,
+{
+    updates: Vec<SearchUpdate>,
+    _phantom: PhantomData<Pst>,
+}
+
+impl<Pst> SearchUpdateQueueInner<Pst>
+where
+    Pst: PstFile,
+    <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+    u64: From<Pst::BTreeKey>,
+    <Pst as PstFile>::NodeBTreeEntry: NodeBTreeEntryReadWrite,
+    <Pst as PstFile>::NodeBTree: RootBTreeReadWrite,
+    <<Pst as PstFile>::NodeBTree as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePageReadWrite<
+            Pst,
+            <Pst as PstFile>::NodeBTreeEntry,
+            <<Pst as PstFile>::NodeBTree as RootBTree>::LeafPage,
+        >,
+    <<<Pst as PstFile>::NodeBTree as RootBTree>::IntermediatePage as BTreePage>::Entry:
+        BTreePageEntryReadWrite,
+    <<Pst as PstFile>::NodeBTree as RootBTree>::LeafPage: RootBTreeLeafPageReadWrite<Pst>,
+    <Pst as PstFile>::BlockBTreeEntry: BlockBTreeEntryReadWrite,
+    <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePageReadWrite<
+            Pst,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+        >,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+        RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+    <Pst as PstFile>::BlockTrailer: BlockTrailerReadWrite,
+    <Pst as PstFile>::BlockTrailer: BlockTrailerReadWrite,
+    <Pst as PstFile>::DataTreeBlock: IntermediateTreeBlockReadWrite,
+    <<Pst as PstFile>::DataTreeBlock as IntermediateTreeBlock>::Entry:
+        IntermediateTreeEntryReadWrite,
+    <Pst as PstFile>::DataBlock: BlockReadWrite + Clone,
+    <Pst as PstFile>::Store: StoreReadWrite<Pst>,
+{
+    fn read(store: Rc<Pst::Store>) -> io::Result<Self> {
+        let pst = store.pst();
+        let header = pst.header();
+        let encoding = header.crypt_method();
+        let root = header.root();
+
+        let mut file = pst
+            .reader()
+            .lock()
+            .map_err(|_| MessagingError::FailedToLockFile)?;
+        let file = &mut *file;
+
+        let node_btree = <Pst as PstFile>::NodeBTree::read(file, *root.node_btree())?;
+        let block_btree = <Pst as PstFile>::BlockBTree::read(file, *root.block_btree())?;
+
+        let mut page_cache = Default::default();
+        let node = node_btree.find_entry(
+            file,
+            u32::from(NID_SEARCH_MANAGEMENT_QUEUE).into(),
+            &mut page_cache,
+        )?;
+
         let start = node.parent().map(u32::from).unwrap_or_default();
-        if start % 20 != 0 {
+        if start % SEARCH_UPDATE_SIZE != 0 {
             return Err(MessagingError::InvalidSearchUpdateQueueOffset(start).into());
         }
-        let start = u16::try_from(start)
+        let start = usize::try_from(start)
             .map_err(|_| MessagingError::InvalidSearchUpdateQueueOffset(start))?;
 
-        let key = u64::from(node.data());
-        if key == 0 {
+        let key = node.data().search_key();
+        if u64::from(key) == 0 {
             return Ok(Self {
                 updates: Default::default(),
+                _phantom: PhantomData,
             });
         }
 
-        let block = block_btree.find_entry(f, key)?;
-        let tree = UnicodeDataTree::read(f, encoding, &block)?;
-        let data: Vec<_> = tree
-            .blocks(f, encoding, block_btree)?
-            .flat_map(Vec::from)
-            .skip(start as usize)
-            .collect();
+        let mut page_cache = Default::default();
+        let block = block_btree.find_entry(file, key, &mut page_cache)?;
+        let tree = DataTree::<Pst>::read(file, encoding, &block)?;
+        let mut data = Vec::new();
+        let mut block_cache = Default::default();
+        let size = tree
+            .reader(
+                file,
+                encoding,
+                &block_btree,
+                &mut page_cache,
+                &mut block_cache,
+            )?
+            .read_to_end(&mut data)?;
 
-        let size = data.len();
-        if size % 20 != 0 {
+        if size % SEARCH_UPDATE_SIZE as usize != 0 {
             return Err(MessagingError::InvalidSearchUpdateQueueSize(size).into());
         }
 
-        let count = size / 20;
-        let mut updates = Vec::with_capacity(count);
-        let mut cursor = Cursor::new(data);
-        while let Ok(entry) = SearchUpdate::read(&mut cursor) {
-            updates.push(entry);
-        }
+        let updates = if size > start {
+            let count = (size - start) / SEARCH_UPDATE_SIZE as usize;
+            let mut updates = Vec::with_capacity(count);
+            let mut cursor = Cursor::new(&data[start..]);
+            while let Ok(entry) = SearchUpdate::read(&mut cursor) {
+                updates.push(entry);
+            }
+            updates
+        } else {
+            Default::default()
+        };
 
-        Ok(Self { updates })
+        Ok(Self {
+            updates,
+            _phantom: PhantomData,
+        })
     }
+}
+pub struct UnicodeSearchUpdateQueue {
+    inner: SearchUpdateQueueInner<UnicodePstFile>,
+}
 
-    pub fn updates(&self) -> &[SearchUpdate] {
-        &self.updates
+impl SearchUpdateQueue for UnicodeSearchUpdateQueue {
+    fn updates(&self) -> &[SearchUpdate] {
+        &self.inner.updates
+    }
+}
+
+impl SearchUpdateQueueReadWrite<UnicodePstFile> for UnicodeSearchUpdateQueue {
+    fn read(store: Rc<UnicodeStore>) -> io::Result<Rc<Self>> {
+        let inner = SearchUpdateQueueInner::read(store)?;
+        Ok(Rc::new(Self { inner }))
     }
 }
 
 pub struct AnsiSearchUpdateQueue {
-    updates: Vec<SearchUpdate>,
+    inner: SearchUpdateQueueInner<AnsiPstFile>,
 }
 
-impl AnsiSearchUpdateQueue {
-    pub fn read<R: Read + Seek>(
-        f: &mut R,
-        encoding: NdbCryptMethod,
-        block_btree: &AnsiBlockBTree,
-        node: AnsiNodeBTreeEntry,
-    ) -> io::Result<Self> {
-        let start = node.parent().map(u32::from).unwrap_or_default();
-        if start % 20 != 0 {
-            return Err(MessagingError::InvalidSearchUpdateQueueOffset(start).into());
-        }
-        let start = u16::try_from(start)
-            .map_err(|_| MessagingError::InvalidSearchUpdateQueueOffset(start))?;
-
-        let key = u32::from(node.data());
-        if key == 0 {
-            return Ok(Self {
-                updates: Default::default(),
-            });
-        }
-
-        let block = block_btree.find_entry(f, key)?;
-        let tree = AnsiDataTree::read(f, encoding, &block)?;
-        let data: Vec<_> = tree
-            .blocks(f, encoding, block_btree)?
-            .flat_map(Vec::from)
-            .skip(start as usize)
-            .collect();
-
-        let size = data.len();
-        if size % 20 != 0 {
-            return Err(MessagingError::InvalidSearchUpdateQueueSize(size).into());
-        }
-
-        let count = size / 20;
-        let mut updates = Vec::with_capacity(count);
-        let mut cursor = Cursor::new(data);
-        while let Ok(entry) = SearchUpdate::read(&mut cursor) {
-            updates.push(entry);
-        }
-
-        Ok(Self { updates })
+impl SearchUpdateQueue for AnsiSearchUpdateQueue {
+    fn updates(&self) -> &[SearchUpdate] {
+        &self.inner.updates
     }
+}
 
-    pub fn updates(&self) -> &[SearchUpdate] {
-        &self.updates
+impl SearchUpdateQueueReadWrite<AnsiPstFile> for AnsiSearchUpdateQueue {
+    fn read(store: Rc<AnsiStore>) -> io::Result<Rc<Self>> {
+        let inner = SearchUpdateQueueInner::read(store)?;
+        Ok(Rc::new(Self { inner }))
     }
 }

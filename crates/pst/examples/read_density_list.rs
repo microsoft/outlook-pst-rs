@@ -19,7 +19,7 @@ fn main() -> anyhow::Result<()> {
 fn read_density_list<Pst>(pst: Pst)
 where
     Pst: PstFile,
-    <Pst as PstFile>::BlockId: Debug,
+    <Pst as PstFile>::PageId: Debug,
     <Pst as PstFile>::ByteIndex: Debug,
 {
     let density_list = pst.density_list();

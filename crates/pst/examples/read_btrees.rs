@@ -2,11 +2,11 @@ use clap::Parser;
 use outlook_pst::{
     ndb::{
         block::{
-            Block, BlockTrailer, IntermediateTreeBlock, IntermediateTreeHeader, UnicodeDataTree,
-            UnicodeSubNodeTree,
+            Block, BlockTrailer, IntermediateDataTreeEntry, IntermediateTreeBlock,
+            IntermediateTreeHeader, UnicodeDataTree, UnicodeSubNodeTree,
         },
-        block_id::UnicodeBlockId,
-        block_ref::UnicodeBlockRef,
+        block_id::{BlockId, UnicodeBlockId},
+        block_ref::UnicodePageRef,
         header::{Header, NdbCryptMethod},
         node_id::NodeId,
         page::{
@@ -17,21 +17,18 @@ use outlook_pst::{
     },
     *,
 };
-use std::{
-    io::{self, Read, Seek},
-    iter,
-};
+use std::{io, iter};
 
 mod args;
 
 fn main() -> anyhow::Result<()> {
     let args = args::Args::try_parse()?;
-    let pst = UnicodePstFile::open(&args.file).unwrap();
+    let pst = UnicodePstFile::open(&args.file).expect("Failed to open PST file");
     let header = pst.header();
     let root = header.root();
 
     {
-        let mut file = pst.reader().lock().unwrap();
+        let mut file = pst.reader().lock().expect("Failed to lock reader");
         let file = &mut *file;
 
         output_block_btree(file, None, *root.block_btree())?;
@@ -50,7 +47,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn output_data_tree<R: Read + Seek>(
+fn output_data_tree<R: PstReader>(
     file: &mut R,
     encoding: NdbCryptMethod,
     indent: &str,
@@ -58,7 +55,8 @@ fn output_data_tree<R: Read + Seek>(
     block_btree: &UnicodeBlockBTree,
     node_data_tree: UnicodeBlockId,
 ) -> io::Result<()> {
-    let data_block = block_btree.find_entry(file, u64::from(node_data_tree))?;
+    let mut page_cache = Default::default();
+    let data_block = block_btree.find_entry(file, node_data_tree.search_key(), &mut page_cache)?;
     let data_tree = UnicodeDataTree::read(&mut *file, encoding, &data_block)?;
     match data_tree {
         UnicodeDataTree::Intermediate(block) => {
@@ -109,7 +107,7 @@ fn output_data_tree<R: Read + Seek>(
     Ok(())
 }
 
-fn output_sub_node_tree<R: Read + Seek>(
+fn output_sub_node_tree<R: PstReader>(
     file: &mut R,
     encoding: NdbCryptMethod,
     indent: &str,
@@ -117,7 +115,9 @@ fn output_sub_node_tree<R: Read + Seek>(
     block_btree: &UnicodeBlockBTree,
     sub_node_btree: UnicodeBlockId,
 ) -> io::Result<()> {
-    let sub_node_block = block_btree.find_entry(file, u64::from(sub_node_btree))?;
+    let mut page_cache = Default::default();
+    let sub_node_block =
+        block_btree.find_entry(file, sub_node_btree.search_key(), &mut page_cache)?;
     let sub_node_btree = UnicodeSubNodeTree::read(&mut *file, &sub_node_block)?;
     match sub_node_btree {
         UnicodeSubNodeTree::Intermediate(block) => {
@@ -175,15 +175,16 @@ fn output_sub_node_tree<R: Read + Seek>(
                     entry.block(),
                 )?;
 
-                let sub_node_block = block_btree.find_entry(file, u64::from(entry.block()))?;
+                let sub_node_block =
+                    block_btree.find_entry(file, entry.block().search_key(), &mut page_cache)?;
                 println!(
-                    "{indent}{sub_node_indent}  BlockRef: {:?}",
+                    "{indent}{sub_node_indent}  PageRef: {:?}",
                     sub_node_block.block()
                 );
 
                 if let Some(sub_node) = entry.sub_node() {
                     let indent = format!("{indent}{sub_node_indent}  ");
-                    println!("{indent}Sub-Node Block: {:?}", sub_node);
+                    println!("{indent}Sub-Node Block: {sub_node:?}");
                     output_sub_node_tree(file, encoding, &indent, None, block_btree, sub_node)?;
                 } else {
                     println!("{indent}{sub_node_indent}  Sub-Node Block: None");
@@ -194,12 +195,12 @@ fn output_sub_node_tree<R: Read + Seek>(
     Ok(())
 }
 
-fn output_node_btree<R: Read + Seek>(
+fn output_node_btree<R: PstReader>(
     file: &mut R,
     encoding: NdbCryptMethod,
     max_level: Option<u8>,
     block_btree: &UnicodeBlockBTree,
-    node_btree: UnicodeBlockRef,
+    node_btree: UnicodePageRef,
 ) -> io::Result<()> {
     let node_btree = UnicodeNodeBTree::read(&mut *file, node_btree)?;
     match node_btree {
@@ -241,14 +242,14 @@ fn output_node_btree<R: Read + Seek>(
             for entry in entries {
                 println!("{indent} Node: {:?}", entry.node());
                 let indent = format!("{indent}  ");
-                if u64::from(entry.data()) == 0 {
+                if entry.data().search_key() == 0 {
                     println!("{indent}Data Block: {:?}", entry.data());
                 } else {
                     output_data_tree(file, encoding, &indent, None, block_btree, entry.data())?;
                 }
 
                 if let Some(sub_node) = entry.sub_node() {
-                    println!("{indent}Sub-Node Block: {:?}", sub_node);
+                    println!("{indent}Sub-Node Block: {sub_node:?}");
                     let indent = format!("{indent} ");
                     output_sub_node_tree(file, encoding, &indent, None, block_btree, sub_node)?;
                 } else {
@@ -262,10 +263,10 @@ fn output_node_btree<R: Read + Seek>(
     Ok(())
 }
 
-fn output_block_btree<R: Read + Seek>(
+fn output_block_btree<R: PstReader>(
     file: &mut R,
     max_level: Option<u8>,
-    block_btree: UnicodeBlockRef,
+    block_btree: UnicodePageRef,
 ) -> io::Result<()> {
     let block_btree = UnicodeBlockBTree::read(&mut *file, block_btree)?;
     match block_btree {

@@ -24,8 +24,9 @@ fn read_header<Pst>(pst: Pst)
 where
     Pst: PstFile,
     <Pst as PstFile>::BlockId: Debug,
+    <Pst as PstFile>::PageId: Debug,
     <Pst as PstFile>::ByteIndex: Debug,
-    <Pst as PstFile>::BlockRef: Debug,
+    <Pst as PstFile>::PageRef: Debug,
 {
     let header = pst.header();
     let version = header.version();

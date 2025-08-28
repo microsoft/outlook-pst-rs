@@ -4,12 +4,16 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
 use super::{read_write::*, *};
-use crate::ndb::{
-    block::*,
-    header::NdbCryptMethod,
-    node_id::*,
-    page::{AnsiBlockBTree, UnicodeBlockBTree},
-    read_write::*,
+use crate::{
+    ndb::{
+        block::*,
+        block_id::BlockId,
+        header::NdbCryptMethod,
+        node_id::*,
+        page::{AnsiBlockBTree, RootBTree, UnicodeBlockBTree},
+        read_write::*,
+    },
+    AnsiPstFile, PstFile, PstFileReadWriteBlockBTree, PstReader, UnicodePstFile,
 };
 
 pub const HEAP_INDEX_MASK: u32 = (1_u16.rotate_right(5) - 1) as u32;
@@ -20,7 +24,7 @@ pub struct HeapId(NodeId);
 
 impl HeapId {
     pub fn new(index: u16, block_index: u16) -> LtpResult<Self> {
-        let shifted_index = index.rotate_left(11);
+        let shifted_index = index.rotate_left(5);
         if shifted_index & 0x1F != 0 {
             return Err(LtpError::InvalidHeapIndex(index));
         };
@@ -195,14 +199,14 @@ impl TryFrom<u8> for HeapFillLevel {
 impl HeapFillLevel {
     fn unpack_fill_levels(value: u32) -> [HeapFillLevel; 8] {
         [
-            HeapFillLevel::try_from((value & 0x0F) as u8).unwrap(),
-            HeapFillLevel::try_from(((value >> 4) & 0x0F) as u8).unwrap(),
-            HeapFillLevel::try_from(((value >> 8) & 0x0F) as u8).unwrap(),
-            HeapFillLevel::try_from(((value >> 12) & 0x0F) as u8).unwrap(),
-            HeapFillLevel::try_from(((value >> 16) & 0x0F) as u8).unwrap(),
-            HeapFillLevel::try_from(((value >> 20) & 0x0F) as u8).unwrap(),
-            HeapFillLevel::try_from(((value >> 24) & 0x0F) as u8).unwrap(),
-            HeapFillLevel::try_from(((value >> 28) & 0x0F) as u8).unwrap(),
+            HeapFillLevel::try_from((value & 0x0F) as u8).expect("Invalid HeapFillLevel"),
+            HeapFillLevel::try_from(((value >> 4) & 0x0F) as u8).expect("Invalid HeapFillLevel"),
+            HeapFillLevel::try_from(((value >> 8) & 0x0F) as u8).expect("Invalid HeapFillLevel"),
+            HeapFillLevel::try_from(((value >> 12) & 0x0F) as u8).expect("Invalid HeapFillLevel"),
+            HeapFillLevel::try_from(((value >> 16) & 0x0F) as u8).expect("Invalid HeapFillLevel"),
+            HeapFillLevel::try_from(((value >> 20) & 0x0F) as u8).expect("Invalid HeapFillLevel"),
+            HeapFillLevel::try_from(((value >> 24) & 0x0F) as u8).expect("Invalid HeapFillLevel"),
+            HeapFillLevel::try_from(((value >> 28) & 0x0F) as u8).expect("Invalid HeapFillLevel"),
         ]
     }
 
@@ -254,7 +258,7 @@ impl HeapNodeHeader {
     }
 }
 
-impl HeapNodeReadWrite for HeapNodeHeader {
+impl HeapNodePageReadWrite for HeapNodeHeader {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let page_map_offset = f.read_u16::<LittleEndian>()?;
         let heap_signature = f.read_u8()?;
@@ -300,7 +304,7 @@ impl HeapNodePageHeader {
     }
 }
 
-impl HeapNodeReadWrite for HeapNodePageHeader {
+impl HeapNodePageReadWrite for HeapNodePageHeader {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let page_index = f.read_u16::<LittleEndian>()?;
         Ok(Self::new(page_index))
@@ -335,7 +339,7 @@ impl HeapNodeBitmapHeader {
     }
 }
 
-impl HeapNodeReadWrite for HeapNodeBitmapHeader {
+impl HeapNodePageReadWrite for HeapNodeBitmapHeader {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let page_map_offset = f.read_u16::<LittleEndian>()?;
 
@@ -468,7 +472,7 @@ impl TryFrom<HeapNodePageAllocOffsets> for HeapNodePageMap {
     }
 }
 
-impl HeapNodeReadWrite for HeapNodePageMap {
+impl HeapNodePageReadWrite for HeapNodePageMap {
     fn read(f: &mut dyn Read) -> io::Result<Self> {
         let alloc_count = f.read_u16::<LittleEndian>()?;
         let free_count = f.read_u16::<LittleEndian>()?;
@@ -499,51 +503,83 @@ impl HeapNodeReadWrite for HeapNodePageMap {
     }
 }
 
-pub struct UnicodeHeapNode {
-    data: UnicodeDataTree,
+pub trait HeapNode {
+    fn header(&self) -> io::Result<HeapNodeHeader>;
+    fn find_entry(&self, heap_id: HeapId) -> io::Result<&[u8]>;
 }
 
-impl UnicodeHeapNode {
-    pub fn new(data: UnicodeDataTree) -> Self {
-        Self { data }
-    }
+struct HeapNodeInner<Pst>
+where
+    Pst: PstFile,
+{
+    data: Vec<<Pst as PstFile>::DataBlock>,
+}
 
-    pub fn data(&self) -> &UnicodeDataTree {
-        &self.data
-    }
-
-    pub fn header<R: Read + Seek>(
-        &self,
+impl<Pst> HeapNodeInner<Pst>
+where
+    Pst: PstFile,
+    <Pst as PstFile>::BlockId: BlockId<Index = <Pst as PstFile>::BTreeKey> + BlockIdReadWrite,
+    <Pst as PstFile>::ByteIndex: ByteIndexReadWrite,
+    <Pst as PstFile>::BlockRef: BlockRefReadWrite,
+    <Pst as PstFile>::PageTrailer: PageTrailerReadWrite,
+    <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+    <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePageReadWrite<
+            Pst,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+        >,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+        RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+    <Pst as PstFile>::BlockTrailer: BlockTrailerReadWrite,
+    <Pst as PstFile>::DataTreeBlock: IntermediateTreeBlockReadWrite,
+    <<Pst as PstFile>::DataTreeBlock as IntermediateTreeBlock>::Entry:
+        IntermediateTreeEntryReadWrite,
+    <Pst as PstFile>::DataBlock: BlockReadWrite + Clone,
+{
+    fn read<R: PstReader>(
         f: &mut R,
+        block_btree: &PstFileReadWriteBlockBTree<Pst>,
+        page_cache: &mut RootBTreePageCache<<Pst as PstFile>::BlockBTree>,
         encoding: NdbCryptMethod,
-        block_tree: &UnicodeBlockBTree,
-    ) -> io::Result<HeapNodeHeader> {
-        let block = self
-            .data
-            .blocks(f, encoding, block_tree)?
-            .next()
-            .ok_or(LtpError::HeapBlockIndexNotFound(0))?;
+        key: <Pst as PstFile>::BTreeKey,
+    ) -> io::Result<Self> {
+        let block = block_btree.find_entry(f, key, page_cache)?;
+        let data_tree = DataTree::<Pst>::read(f, encoding, &block)?;
+        let data = data_tree
+            .blocks(
+                f,
+                encoding,
+                block_btree,
+                page_cache,
+                &mut Default::default(),
+            )?
+            .collect();
 
-        let mut cursor = block.data();
+        Ok(Self { data })
+    }
+
+    fn header(&self) -> io::Result<HeapNodeHeader> {
+        let data = self.data.first().ok_or(io::ErrorKind::UnexpectedEof)?;
+        let mut cursor = Cursor::new(data.data());
         let header = HeapNodeHeader::read(&mut cursor)?;
         Ok(header)
     }
 
-    pub fn find_entry<R: Read + Seek>(
-        &self,
-        heap_id: HeapId,
-        f: &mut R,
-        encoding: NdbCryptMethod,
-        block_tree: &UnicodeBlockBTree,
-    ) -> io::Result<Vec<u8>> {
+    fn find_entry<'a>(&'a self, heap_id: HeapId) -> io::Result<&'a [u8]>
+    where
+        <Pst as PstFile>::DataBlock: 'a,
+    {
         let block_index = heap_id.block_index();
         let block = self
             .data
-            .blocks(f, encoding, block_tree)?
-            .nth(block_index as usize)
-            .ok_or(LtpError::HeapBlockIndexNotFound(block_index))?;
+            .get(block_index as usize)
+            .ok_or(LtpError::HeapBlockIndexNotFound(block_index))?
+            .data();
 
-        let mut cursor = Cursor::new(block.data());
+        let mut cursor = Cursor::new(block);
 
         let page_map_offset = match block_index {
             0 => {
@@ -572,83 +608,60 @@ impl UnicodeHeapNode {
         let alloc = &allocations[index as usize];
         let start = alloc.offset() as usize;
         let end = start + alloc.size() as usize;
-        Ok(block.data()[start..end].to_vec())
+        Ok(&block[start..end])
+    }
+}
+
+pub struct UnicodeHeapNode {
+    inner: HeapNodeInner<UnicodePstFile>,
+}
+
+impl HeapNode for UnicodeHeapNode {
+    fn header(&self) -> io::Result<HeapNodeHeader> {
+        self.inner.header()
+    }
+
+    fn find_entry(&self, heap_id: HeapId) -> io::Result<&[u8]> {
+        self.inner.find_entry(heap_id)
+    }
+}
+
+impl HeapNodeReadWrite<UnicodePstFile> for UnicodeHeapNode {
+    fn read<R: PstReader>(
+        f: &mut R,
+        block_btree: &UnicodeBlockBTree,
+        page_cache: &mut RootBTreePageCache<UnicodeBlockBTree>,
+        encoding: NdbCryptMethod,
+        key: u64,
+    ) -> io::Result<Self> {
+        let inner = HeapNodeInner::read(f, block_btree, page_cache, encoding, key)?;
+        Ok(Self { inner })
     }
 }
 
 pub struct AnsiHeapNode {
-    data: AnsiDataTree,
+    inner: HeapNodeInner<AnsiPstFile>,
 }
 
-impl AnsiHeapNode {
-    pub fn new(data: AnsiDataTree) -> Self {
-        Self { data }
+impl HeapNode for AnsiHeapNode {
+    fn header(&self) -> io::Result<HeapNodeHeader> {
+        self.inner.header()
     }
 
-    pub fn data(&self) -> &AnsiDataTree {
-        &self.data
+    fn find_entry(&self, heap_id: HeapId) -> io::Result<&[u8]> {
+        self.inner.find_entry(heap_id)
     }
+}
 
-    pub fn header<R: Read + Seek>(
-        &self,
+impl HeapNodeReadWrite<AnsiPstFile> for AnsiHeapNode {
+    fn read<R: PstReader>(
         f: &mut R,
+        block_btree: &AnsiBlockBTree,
+        page_cache: &mut RootBTreePageCache<AnsiBlockBTree>,
         encoding: NdbCryptMethod,
-        block_tree: &AnsiBlockBTree,
-    ) -> io::Result<HeapNodeHeader> {
-        let block = self
-            .data
-            .blocks(f, encoding, block_tree)?
-            .next()
-            .ok_or(LtpError::HeapBlockIndexNotFound(0))?;
-
-        let mut cursor = block.data();
-        let header = HeapNodeHeader::read(&mut cursor)?;
-        Ok(header)
-    }
-
-    pub fn find_entry<R: Read + Seek>(
-        &self,
-        heap_id: HeapId,
-        f: &mut R,
-        encoding: NdbCryptMethod,
-        block_tree: &AnsiBlockBTree,
-    ) -> io::Result<Vec<u8>> {
-        let block_index = heap_id.block_index();
-        let block = self
-            .data
-            .blocks(f, encoding, block_tree)?
-            .nth(block_index as usize)
-            .ok_or(LtpError::HeapBlockIndexNotFound(block_index))?;
-
-        let mut cursor = Cursor::new(block.data());
-
-        let page_map_offset = match block_index {
-            0 => {
-                let header = HeapNodeHeader::read(&mut cursor)?;
-                header.page_map_offset()
-            }
-            bitmap if bitmap % 128 == 8 => {
-                let header = HeapNodeBitmapHeader::read(&mut cursor)?;
-                header.page_map_offset()
-            }
-            _ => {
-                let header = HeapNodePageHeader::read(&mut cursor)?;
-                header.page_map_offset()
-            }
-        };
-
-        cursor.seek(SeekFrom::Start(u64::from(page_map_offset)))?;
-        let page_map = HeapNodePageMap::read(&mut cursor)?;
-        let allocations = page_map.allocations();
-
-        let index = heap_id.index()?;
-        if index as usize >= allocations.len() {
-            return Err(LtpError::HeapAllocIndexNotFound(index).into());
-        }
-
-        let alloc = &allocations[index as usize];
-        let start = alloc.offset() as usize;
-        let end = start + alloc.size() as usize;
-        Ok(block.data()[start..end].to_vec())
+        key: u32,
+    ) -> io::Result<Self> {
+        let inner = HeapNodeInner::read(f, block_btree, page_cache, encoding, key)?;
+        Ok(Self { inner })
     }
 }

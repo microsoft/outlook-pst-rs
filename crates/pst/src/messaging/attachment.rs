@@ -2,25 +2,24 @@
 
 use std::{collections::BTreeMap, io, rc::Rc};
 
-use super::{message::*, *};
+use super::{message::*, read_write::*, *};
 use crate::{
     ltp::{
-        heap::{AnsiHeapNode, UnicodeHeapNode},
-        prop_context::{AnsiPropertyContext, BinaryValue, PropertyValue, UnicodePropertyContext},
+        heap::HeapNode,
+        prop_context::{BinaryValue, PropertyContext, PropertyValue},
         prop_type::PropertyType,
-        tree::{AnsiHeapTree, UnicodeHeapTree},
+        read_write::*,
     },
     ndb::{
-        block::{AnsiDataTree, UnicodeDataTree},
+        block::{DataTree, IntermediateTreeBlock},
+        block_id::BlockId,
         header::Header,
         node_id::{NodeId, NodeIdType},
-        page::{
-            AnsiBlockBTree, AnsiBlockBTreeEntry, AnsiNodeBTreeEntry, NodeBTreeEntry,
-            UnicodeBlockBTree, UnicodeBlockBTreeEntry, UnicodeNodeBTreeEntry,
-        },
+        page::{BTreePage, NodeBTreeEntry, RootBTree},
+        read_write::*,
         root::Root,
     },
-    PstFile,
+    AnsiPstFile, PstFile, PstFileLock, UnicodePstFile,
 };
 
 #[derive(Default, Debug)]
@@ -127,28 +126,68 @@ impl TryFrom<i32> for AttachmentMethod {
     }
 }
 
-pub enum UnicodeAttachmentData {
+pub enum AttachmentData {
     Binary(BinaryValue),
-    Message(Rc<UnicodeMessage>),
-    Storage(UnicodeBlockBTreeEntry),
+    Message(Rc<dyn Message>),
 }
 
-pub struct UnicodeAttachment {
-    message: Rc<UnicodeMessage>,
+pub trait Attachment {
+    fn message(&self) -> Rc<dyn Message>;
+    fn properties(&self) -> &AttachmentProperties;
+    fn data(&self) -> Option<&AttachmentData>;
+}
+
+struct AttachmentInner<Pst>
+where
+    Pst: PstFile,
+{
+    message: Rc<Pst::Message>,
     properties: AttachmentProperties,
-    data: Option<UnicodeAttachmentData>,
+    data: Option<AttachmentData>,
 }
 
-impl UnicodeAttachment {
-    pub fn message(&self) -> &Rc<UnicodeMessage> {
-        &self.message
-    }
-
-    pub fn read(
-        message: Rc<UnicodeMessage>,
+impl<Pst> AttachmentInner<Pst>
+where
+    Pst: PstFile + PstFileLock<Pst>,
+    <Pst as PstFile>::BTreeKey: BTreePageKeyReadWrite,
+    <Pst as PstFile>::NodeBTreeEntry: NodeBTreeEntryReadWrite,
+    <Pst as PstFile>::NodeBTree: RootBTreeReadWrite,
+    <<Pst as PstFile>::NodeBTree as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePageReadWrite<
+            Pst,
+            <Pst as PstFile>::NodeBTreeEntry,
+            <<Pst as PstFile>::NodeBTree as RootBTree>::LeafPage,
+        >,
+    <<<Pst as PstFile>::NodeBTree as RootBTree>::IntermediatePage as BTreePage>::Entry:
+        BTreePageEntryReadWrite,
+    <<Pst as PstFile>::NodeBTree as RootBTree>::LeafPage: RootBTreeLeafPageReadWrite<Pst>,
+    <Pst as PstFile>::BlockBTreeEntry: BlockBTreeEntryReadWrite,
+    <Pst as PstFile>::BlockBTree: RootBTreeReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::Entry: BTreeEntryReadWrite,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::IntermediatePage:
+        RootBTreeIntermediatePageReadWrite<
+            Pst,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::Entry,
+            <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage,
+        >,
+    <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
+        RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
+    <Pst as PstFile>::BlockTrailer: BlockTrailerReadWrite,
+    <Pst as PstFile>::DataTreeBlock: IntermediateTreeBlockReadWrite,
+    <<Pst as PstFile>::DataTreeBlock as IntermediateTreeBlock>::Entry:
+        IntermediateTreeEntryReadWrite,
+    <Pst as PstFile>::DataBlock: BlockReadWrite + Clone,
+    <Pst as PstFile>::HeapNode: HeapNodeReadWrite<Pst>,
+    <Pst as PstFile>::PropertyTree: HeapTreeReadWrite<Pst>,
+    <Pst as PstFile>::PropertyContext: PropertyContextReadWrite<Pst>,
+    <Pst as PstFile>::Store: StoreReadWrite<Pst>,
+    <Pst as PstFile>::Message: MessageReadWrite<Pst> + 'static,
+{
+    fn read(
+        message: Rc<<Pst as PstFile>::Message>,
         sub_node: NodeId,
         prop_ids: Option<&[u16]>,
-    ) -> io::Result<Rc<Self>> {
+    ) -> io::Result<Self> {
         let node_id_type = sub_node.id_type()?;
         match node_id_type {
             NodeIdType::Attachment => {}
@@ -157,7 +196,7 @@ impl UnicodeAttachment {
             }
         }
 
-        let store = message.store();
+        let store = message.pst_store();
         let pst = store.pst();
         let header = pst.header();
         let root = header.root();
@@ -170,27 +209,43 @@ impl UnicodeAttachment {
             let file = &mut *file;
 
             let encoding = header.crypt_method();
-            let block_btree = UnicodeBlockBTree::read(file, *root.block_btree())?;
+            let block_btree = <<Pst as PstFile>::BlockBTree as RootBTreeReadWrite>::read(
+                file,
+                *root.block_btree(),
+            )?;
 
             let node = message
                 .sub_nodes()
                 .get(&sub_node)
                 .ok_or(MessagingError::AttachmentSubNodeNotFound(sub_node))?;
-            let node = UnicodeNodeBTreeEntry::new(node.node(), node.block(), node.sub_node(), None);
+            let node = <<Pst as PstFile>::NodeBTreeEntry as NodeBTreeEntryReadWrite>::new(
+                node.node(),
+                node.block(),
+                node.sub_node(),
+                None,
+            );
 
+            let mut page_cache = pst.block_cache();
             let data = node.data();
-            let block = block_btree.find_entry(file, u64::from(data))?;
-            let heap = UnicodeHeapNode::new(UnicodeDataTree::read(file, encoding, &block)?);
-            let header = heap.header(file, encoding, &block_btree)?;
+            let heap = <<Pst as PstFile>::HeapNode as HeapNodeReadWrite<Pst>>::read(
+                file,
+                &block_btree,
+                &mut page_cache,
+                encoding,
+                data.search_key(),
+            )?;
+            let header = heap.header()?;
 
-            let tree = UnicodeHeapTree::new(heap, header.user_root());
-            let prop_context = UnicodePropertyContext::new(node, tree);
+            let tree = <Pst as PstFile>::PropertyTree::new(heap, header.user_root());
+            let prop_context = <<Pst as PstFile>::PropertyContext as PropertyContextReadWrite<
+                Pst,
+            >>::new(node, tree);
             let properties = prop_context
-                .properties(file, encoding, &block_btree)?
+                .properties()?
                 .into_iter()
                 .map(|(prop_id, record)| {
                     prop_context
-                        .read_property(file, encoding, &block_btree, record)
+                        .read_property(file, encoding, &block_btree, &mut page_cache, record)
                         .map(|value| (prop_id, value))
                 })
                 .collect::<io::Result<BTreeMap<_, _>>>()?;
@@ -211,7 +266,7 @@ impl UnicodeAttachment {
                             .into())
                         }
                     };
-                    Some(UnicodeAttachmentData::Binary(binary_data.clone()))
+                    Some(AttachmentData::Binary(binary_data.clone()))
                 }
                 AttachmentMethod::EmbeddedMessage => {
                     let object_data = match properties
@@ -232,14 +287,19 @@ impl UnicodeAttachment {
                         .sub_nodes()
                         .get(&sub_node)
                         .ok_or(MessagingError::AttachmentSubNodeNotFound(sub_node))?;
-                    let node = UnicodeNodeBTreeEntry::new(
+                    let node = <<Pst as PstFile>::NodeBTreeEntry as NodeBTreeEntryReadWrite>::new(
                         node.node(),
                         node.block(),
                         node.sub_node(),
                         None,
                     );
-                    let message = UnicodeMessage::read_embedded(store.clone(), node, prop_ids)?;
-                    Some(UnicodeAttachmentData::Message(message))
+                    let message =
+                        <<Pst as PstFile>::Message as MessageReadWrite<Pst>>::read_embedded(
+                            store.clone(),
+                            node,
+                            prop_ids,
+                        )?;
+                    Some(AttachmentData::Message(message))
                 }
                 AttachmentMethod::Storage => {
                     let object_data = match properties
@@ -259,8 +319,20 @@ impl UnicodeAttachment {
                         .sub_nodes()
                         .get(&sub_node)
                         .ok_or(MessagingError::AttachmentSubNodeNotFound(sub_node))?;
-                    let block = block_btree.find_entry(file, u64::from(node.block()))?;
-                    Some(UnicodeAttachmentData::Storage(block))
+                    let block =
+                        block_btree.find_entry(file, node.block().search_key(), &mut page_cache)?;
+                    let block = DataTree::read(file, encoding, &block)?;
+                    let mut data = vec![];
+                    let _ = block
+                        .reader(
+                            file,
+                            encoding,
+                            &block_btree,
+                            &mut page_cache,
+                            &mut Default::default(),
+                        )?
+                        .read_to_end(&mut data)?;
+                    Some(AttachmentData::Binary(BinaryValue::new(data)))
                 }
                 _ => None,
             };
@@ -268,171 +340,88 @@ impl UnicodeAttachment {
             (properties, data)
         };
 
-        Ok(Rc::new(Self {
+        Ok(Self {
             message,
             properties,
             data,
-        }))
-    }
-
-    pub fn properties(&self) -> &AttachmentProperties {
-        &self.properties
-    }
-
-    pub fn data(&self) -> Option<&UnicodeAttachmentData> {
-        self.data.as_ref()
+        })
     }
 }
 
-pub enum AnsiAttachmentData {
-    Binary(BinaryValue),
-    Message(Rc<AnsiMessage>),
-    Storage(AnsiBlockBTreeEntry),
+pub struct UnicodeAttachment {
+    inner: AttachmentInner<UnicodePstFile>,
+}
+
+impl UnicodeAttachment {
+    pub fn read(
+        message: Rc<UnicodeMessage>,
+        sub_node: NodeId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<Self>> {
+        <Self as AttachmentReadWrite<UnicodePstFile>>::read(message, sub_node, prop_ids)
+    }
+}
+
+impl Attachment for UnicodeAttachment {
+    fn message(&self) -> Rc<dyn Message> {
+        self.inner.message.clone()
+    }
+
+    fn properties(&self) -> &AttachmentProperties {
+        &self.inner.properties
+    }
+
+    fn data(&self) -> Option<&AttachmentData> {
+        self.inner.data.as_ref()
+    }
+}
+
+impl AttachmentReadWrite<UnicodePstFile> for UnicodeAttachment {
+    fn read(
+        message: Rc<UnicodeMessage>,
+        sub_node: NodeId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<Self>> {
+        let inner = AttachmentInner::read(message, sub_node, prop_ids)?;
+        Ok(Rc::new(Self { inner }))
+    }
 }
 
 pub struct AnsiAttachment {
-    message: Rc<AnsiMessage>,
-    properties: AttachmentProperties,
-    data: Option<AnsiAttachmentData>,
+    inner: AttachmentInner<AnsiPstFile>,
 }
 
 impl AnsiAttachment {
-    pub fn message(&self) -> &Rc<AnsiMessage> {
-        &self.message
-    }
-
     pub fn read(
         message: Rc<AnsiMessage>,
         sub_node: NodeId,
         prop_ids: Option<&[u16]>,
     ) -> io::Result<Rc<Self>> {
-        let node_id_type = sub_node.id_type()?;
-        match node_id_type {
-            NodeIdType::Attachment => {}
-            _ => {
-                return Err(MessagingError::InvalidAttachmentNodeIdType(node_id_type).into());
-            }
-        }
+        <Self as AttachmentReadWrite<AnsiPstFile>>::read(message, sub_node, prop_ids)
+    }
+}
 
-        let store = message.store();
-        let pst = store.pst();
-        let header = pst.header();
-        let root = header.root();
-
-        let (properties, data) = {
-            let mut file = pst
-                .reader()
-                .lock()
-                .map_err(|_| MessagingError::FailedToLockFile)?;
-            let file = &mut *file;
-
-            let encoding = header.crypt_method();
-            let block_btree = AnsiBlockBTree::read(file, *root.block_btree())?;
-
-            let node = message
-                .sub_nodes()
-                .get(&sub_node)
-                .ok_or(MessagingError::AttachmentSubNodeNotFound(sub_node))?;
-            let node = AnsiNodeBTreeEntry::new(node.node(), node.block(), node.sub_node(), None);
-
-            let data = node.data();
-            let block = block_btree.find_entry(file, u32::from(data))?;
-            let heap = AnsiHeapNode::new(AnsiDataTree::read(file, encoding, &block)?);
-            let header = heap.header(file, encoding, &block_btree)?;
-
-            let tree = AnsiHeapTree::new(heap, header.user_root());
-            let prop_context = AnsiPropertyContext::new(node, tree);
-            let properties = prop_context
-                .properties(file, encoding, &block_btree)?
-                .into_iter()
-                .map(|(prop_id, record)| {
-                    prop_context
-                        .read_property(file, encoding, &block_btree, record)
-                        .map(|value| (prop_id, value))
-                })
-                .collect::<io::Result<BTreeMap<_, _>>>()?;
-            let properties = AttachmentProperties { properties };
-
-            let attachment_method = AttachmentMethod::try_from(properties.attachment_method()?)?;
-            let data = match attachment_method {
-                AttachmentMethod::ByValue => {
-                    let binary_data = match properties
-                        .get(0x3701)
-                        .ok_or(MessagingError::AttachmentMessageObjectDataNotFound)?
-                    {
-                        PropertyValue::Binary(value) => value,
-                        invalid => {
-                            return Err(MessagingError::InvalidMessageObjectData(
-                                PropertyType::from(invalid),
-                            )
-                            .into())
-                        }
-                    };
-                    Some(AnsiAttachmentData::Binary(binary_data.clone()))
-                }
-                AttachmentMethod::EmbeddedMessage => {
-                    let object_data = match properties
-                        .get(0x3701)
-                        .ok_or(MessagingError::AttachmentMessageObjectDataNotFound)?
-                    {
-                        PropertyValue::Object(value) => value,
-                        invalid => {
-                            return Err(MessagingError::InvalidMessageObjectData(
-                                PropertyType::from(invalid),
-                            )
-                            .into())
-                        }
-                    };
-
-                    let sub_node = object_data.node();
-                    let node = message
-                        .sub_nodes()
-                        .get(&sub_node)
-                        .ok_or(MessagingError::AttachmentSubNodeNotFound(sub_node))?;
-                    let node =
-                        AnsiNodeBTreeEntry::new(node.node(), node.block(), node.sub_node(), None);
-                    let message = AnsiMessage::read_embedded(store.clone(), node, prop_ids)?;
-                    Some(AnsiAttachmentData::Message(message))
-                }
-                AttachmentMethod::Storage => {
-                    let object_data = match properties
-                        .get(0x3701)
-                        .ok_or(MessagingError::AttachmentMessageObjectDataNotFound)?
-                    {
-                        PropertyValue::Object(value) => value,
-                        invalid => {
-                            return Err(MessagingError::InvalidMessageObjectData(
-                                PropertyType::from(invalid),
-                            )
-                            .into())
-                        }
-                    };
-                    let sub_node = object_data.node();
-                    let node = message
-                        .sub_nodes()
-                        .get(&sub_node)
-                        .ok_or(MessagingError::AttachmentSubNodeNotFound(sub_node))?;
-                    let block = block_btree.find_entry(file, u32::from(node.block()))?;
-                    Some(AnsiAttachmentData::Storage(block))
-                }
-                _ => None,
-            };
-
-            (properties, data)
-        };
-
-        Ok(Rc::new(Self {
-            message,
-            properties,
-            data,
-        }))
+impl Attachment for AnsiAttachment {
+    fn message(&self) -> Rc<dyn Message> {
+        self.inner.message.clone()
     }
 
-    pub fn properties(&self) -> &AttachmentProperties {
-        &self.properties
+    fn properties(&self) -> &AttachmentProperties {
+        &self.inner.properties
     }
 
-    pub fn data(&self) -> Option<&AnsiAttachmentData> {
-        self.data.as_ref()
+    fn data(&self) -> Option<&AttachmentData> {
+        self.inner.data.as_ref()
+    }
+}
+
+impl AttachmentReadWrite<AnsiPstFile> for AnsiAttachment {
+    fn read(
+        message: Rc<AnsiMessage>,
+        sub_node: NodeId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<Self>> {
+        let inner = AttachmentInner::read(message, sub_node, prop_ids)?;
+        Ok(Rc::new(Self { inner }))
     }
 }
