@@ -670,8 +670,18 @@ impl PropertyValueReadWrite for PropertyValue {
                 let mut values = Vec::with_capacity(offsets.len());
                 for i in 0..offsets.len() {
                     let next = offsets[i];
+                    // Some PSTs appear to record the next offset position including the 2-byte UTF-16 NUL terminator
+                    // while our incremental 'start' tracks the position immediately after the last code unit read (and
+                    // stops BEFORE consuming the terminator). This produces a systematic +2 difference. We treat an
+                    // offset of start or start + 2 as acceptable. If we see start + 2 we bump our cursor forward so
+                    // subsequent validation remains aligned.
                     if next != start {
-                        return Err(LtpError::InvalidMultiValuePropertyOffset(next).into());
+                        if next == start + 2 {
+                            // Accept benign +2 discrepancy and realign
+                            start = next; // realign and continue
+                        } else {
+                            return Err(LtpError::InvalidMultiValuePropertyOffset(next).into());
+                        }
                     }
 
                     let mut buffer = Vec::new();
