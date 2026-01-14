@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/compressed-rtf", "crates/pst"]
+members = ["crates/compressed-rtf", "crates/pst", "crates/pst-python"]
 resolver = "2"
 
 [patch.crates-io]
