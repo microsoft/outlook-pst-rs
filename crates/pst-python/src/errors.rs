@@ -2,7 +2,6 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use std::io;
 
-/// Python例外クラス
 #[pyclass(extends=PyException)]
 #[derive(Debug)]
 pub struct PstPythonError {

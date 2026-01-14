@@ -13,5 +13,5 @@ name = "pst_python"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.22", features = ["auto-initialize"] }
+pyo3 = { version = "0.22", features = ["extension-module"] }
 outlook-pst = { path = "../pst" }

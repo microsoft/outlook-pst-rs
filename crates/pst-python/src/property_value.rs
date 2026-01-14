@@ -1,7 +1,6 @@
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-/// PropertyValueをPythonオブジェクトに変換
 pub fn property_value_to_python(py: Python, value: &outlook_pst::ltp::prop_context::PropertyValue) -> PyResult<PyObject> {
     use outlook_pst::ltp::prop_context::PropertyValue;
 
