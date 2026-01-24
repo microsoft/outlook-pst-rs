@@ -338,7 +338,9 @@ impl Message {
                     return Default::default();
                 };
 
-                let recipient_table = message.recipient_table();
+                let Some(recipient_table) = message.recipient_table() else {
+                    return Default::default();
+                };
                 let context = recipient_table.context();
 
                 recipient_table
