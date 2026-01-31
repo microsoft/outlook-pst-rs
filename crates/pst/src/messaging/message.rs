@@ -308,17 +308,15 @@ where
                 }
             })
         });
-        let recipient_table =
-            match (recipient_table_nodes.next(), recipient_table_nodes.next()) {
-                (None, None) => None,
-                (Some(node), None) => Some(
-                    <<Pst as PstFile>::TableContext as TableContextReadWrite<Pst>>::read(
-                        store.clone(),
-                        node,
-                    )?,
-                ),
-                _ => return Err(MessagingError::MultipleMessageRecipientTables.into()),
-            };
+        let recipient_table = match (recipient_table_nodes.next(), recipient_table_nodes.next()) {
+            (None, None) => None,
+            (Some(node), None) => {
+                Some(<<Pst as PstFile>::TableContext as TableContextReadWrite<
+                    Pst,
+                >>::read(store.clone(), node)?)
+            }
+            _ => return Err(MessagingError::MultipleMessageRecipientTables.into()),
+        };
 
         let mut attachment_table_nodes = sub_nodes.iter().filter_map(|(node_id, entry)| {
             node_id.id_type().ok().and_then(|id_type| {
