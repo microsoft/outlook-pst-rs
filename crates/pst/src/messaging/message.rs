@@ -11,6 +11,7 @@ use crate::{
         read_write::*,
         table_context::TableContext,
     },
+    messaging::attachment::{AnsiAttachment, Attachment, UnicodeAttachment},
     ndb::{
         block::{IntermediateTreeBlock, LeafSubNodeTreeEntry, SubNodeTree},
         block_id::BlockId,
@@ -135,8 +136,13 @@ impl MessageProperties {
 pub trait Message {
     fn store(&self) -> Rc<dyn Store>;
     fn properties(&self) -> &MessageProperties;
-    fn recipient_table(&self) -> &Rc<dyn TableContext>;
+    fn recipient_table(&self) -> Option<&Rc<dyn TableContext>>;
     fn attachment_table(&self) -> Option<&Rc<dyn TableContext>>;
+    fn read_attachment(
+        self: Rc<Self>,
+        sub_node: NodeId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<dyn Attachment>>;
 }
 
 struct MessageInner<Pst>
@@ -146,7 +152,7 @@ where
     store: Rc<Pst::Store>,
     properties: MessageProperties,
     sub_nodes: MessageSubNodes<Pst>,
-    recipient_table: Rc<dyn TableContext>,
+    recipient_table: Option<Rc<dyn TableContext>>,
     attachment_table: Option<Rc<dyn TableContext>>,
 }
 
@@ -308,14 +314,15 @@ where
                 }
             })
         });
-        let recipient_table =
-            match (recipient_table_nodes.next(), recipient_table_nodes.next()) {
-                (None, None) => Err(MessagingError::MessageRecipientTableNotFound.into()),
-                (Some(node), None) => <<Pst as PstFile>::TableContext as TableContextReadWrite<
+        let recipient_table = match (recipient_table_nodes.next(), recipient_table_nodes.next()) {
+            (None, None) => None,
+            (Some(node), None) => {
+                Some(<<Pst as PstFile>::TableContext as TableContextReadWrite<
                     Pst,
-                >>::read(store.clone(), node),
-                _ => Err(MessagingError::MultipleMessageRecipientTables.into()),
-            }?;
+                >>::read(store.clone(), node)?)
+            }
+            _ => return Err(MessagingError::MultipleMessageRecipientTables.into()),
+        };
 
         let mut attachment_table_nodes = sub_nodes.iter().filter_map(|(node_id, entry)| {
             node_id.id_type().ok().and_then(|id_type| {
@@ -381,12 +388,20 @@ impl Message for UnicodeMessage {
         &self.inner.properties
     }
 
-    fn recipient_table(&self) -> &Rc<dyn TableContext> {
-        &self.inner.recipient_table
+    fn recipient_table(&self) -> Option<&Rc<dyn TableContext>> {
+        self.inner.recipient_table.as_ref()
     }
 
     fn attachment_table(&self) -> Option<&Rc<dyn TableContext>> {
         self.inner.attachment_table.as_ref()
+    }
+
+    fn read_attachment(
+        self: Rc<Self>,
+        sub_node: NodeId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<dyn Attachment>> {
+        Ok(UnicodeAttachment::read(self, sub_node, prop_ids)?)
     }
 }
 
@@ -441,12 +456,20 @@ impl Message for AnsiMessage {
         &self.inner.properties
     }
 
-    fn recipient_table(&self) -> &Rc<dyn TableContext> {
-        &self.inner.recipient_table
+    fn recipient_table(&self) -> Option<&Rc<dyn TableContext>> {
+        self.inner.recipient_table.as_ref()
     }
 
     fn attachment_table(&self) -> Option<&Rc<dyn TableContext>> {
         self.inner.attachment_table.as_ref()
+    }
+
+    fn read_attachment(
+        self: Rc<Self>,
+        sub_node: NodeId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<dyn Attachment>> {
+        Ok(AnsiAttachment::read(self, sub_node, prop_ids)?)
     }
 }
 
