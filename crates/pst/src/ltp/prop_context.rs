@@ -671,7 +671,13 @@ impl PropertyValueReadWrite for PropertyValue {
                 for i in 0..offsets.len() {
                     let next = offsets[i];
                     if next != start {
-                        return Err(LtpError::InvalidMultiValuePropertyOffset(next).into());
+                        //return Err(LtpError::InvalidMultiValuePropertyOffset(next).into());
+                        if next == start + 2 {
+                            // Accept benign +2 discrepancy and realign
+                            start = next; // realign and continue
+                        } else {
+                            return Err(LtpError::InvalidMultiValuePropertyOffset(next).into());
+                        }
                     }
 
                     let mut buffer = Vec::new();
