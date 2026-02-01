@@ -4,14 +4,13 @@ use std::{collections::BTreeMap, io, rc::Rc};
 
 use super::{read_write::*, store::*, *};
 use crate::{
-    ltp::{
+    AnsiPstFile, PstFile, PstFileLock, UnicodePstFile, ltp::{
         heap::HeapNode,
         prop_context::{PropertyContext, PropertyValue},
         prop_type::PropertyType,
         read_write::*,
         table_context::TableContext,
-    },
-    ndb::{
+    }, messaging::attachment::{AnsiAttachment, Attachment, UnicodeAttachment}, ndb::{
         block::{IntermediateTreeBlock, LeafSubNodeTreeEntry, SubNodeTree},
         block_id::BlockId,
         header::Header,
@@ -19,8 +18,7 @@ use crate::{
         page::{AnsiNodeBTreeEntry, BTreePage, NodeBTreeEntry, RootBTree, UnicodeNodeBTreeEntry},
         read_write::*,
         root::Root,
-    },
-    AnsiPstFile, PstFile, PstFileLock, UnicodePstFile,
+    }
 };
 
 #[derive(Default, Debug)]
@@ -137,6 +135,11 @@ pub trait Message {
     fn properties(&self) -> &MessageProperties;
     fn recipient_table(&self) -> &Rc<dyn TableContext>;
     fn attachment_table(&self) -> Option<&Rc<dyn TableContext>>;
+    fn read_attachment(
+        self: Rc<Self>,
+        sub_node: NodeId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<dyn Attachment>>;
 }
 
 struct MessageInner<Pst>
@@ -388,6 +391,14 @@ impl Message for UnicodeMessage {
     fn attachment_table(&self) -> Option<&Rc<dyn TableContext>> {
         self.inner.attachment_table.as_ref()
     }
+
+    fn read_attachment(
+        self: Rc<Self>,
+        sub_node: NodeId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<dyn Attachment>> {
+        Ok(UnicodeAttachment::read(self, sub_node, prop_ids)?)
+    }
 }
 
 impl MessageReadWrite<UnicodePstFile> for UnicodeMessage {
@@ -447,6 +458,14 @@ impl Message for AnsiMessage {
 
     fn attachment_table(&self) -> Option<&Rc<dyn TableContext>> {
         self.inner.attachment_table.as_ref()
+    }
+
+    fn read_attachment(
+        self: Rc<Self>,
+        sub_node: NodeId,
+        prop_ids: Option<&[u16]>,
+    ) -> io::Result<Rc<dyn Attachment>> {
+        Ok(AnsiAttachment::read(self, sub_node, prop_ids)?)
     }
 }
 
