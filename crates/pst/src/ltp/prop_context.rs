@@ -683,20 +683,18 @@ impl PropertyValueReadWrite for PropertyValue {
 
                         while start < next {
                             let ch = f.read_u16::<LittleEndian>()?;
-                            if ch == 0 {
-                                break;
-                            }
                             buffer.push(ch);
                             start += mem::size_of::<u16>();
                         }
                     } else {
                         while let Ok(ch) = f.read_u16::<LittleEndian>() {
-                            if ch == 0 {
-                                break;
-                            }
                             buffer.push(ch);
                         }
                     };
+
+                    if let Some(end) = buffer.iter().position(|&ch| ch == 0) {
+                        buffer.truncate(end);
+                    }
 
                     values.push(UnicodeValue { buffer });
                 }
