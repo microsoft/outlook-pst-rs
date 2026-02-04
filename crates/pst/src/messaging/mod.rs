@@ -104,8 +104,6 @@ pub enum MessagingError {
     InvalidMessageEntryIdType(crate::ndb::node_id::NodeIdType),
     #[error("Missing Sub-Node Tree on message")]
     MessageSubNodeTreeNotFound,
-    #[error("Missing NID_TYPE_RECIPIENT_TABLE sub-node on message")]
-    MessageRecipientTableNotFound,
     #[error("Multiple NID_TYPE_RECIPIENT_TABLE sub-nodes on message")]
     MultipleMessageRecipientTables,
     #[error("Multiple NID_TYPE_ATTACHMENT_TABLE sub-nodes on message")]
