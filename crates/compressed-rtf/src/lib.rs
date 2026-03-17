@@ -77,19 +77,21 @@ pub fn decompress_rtf(data: &[u8]) -> Result<String> {
                 }
             }
 
-            let buffer: Vec<_> = output.into_iter().map(u16::from).collect();
-            Ok(String::from_utf16_lossy(&buffer))
+            Ok(string_from_ascii(&output))
         }
-        UNCOMPRESSED => {
-            let data: Vec<_> = data[16..raw_size as usize + 16]
-                .iter()
-                .copied()
-                .map(u16::from)
-                .collect();
-            Ok(String::from_utf16_lossy(&data))
-        }
+        UNCOMPRESSED => Ok(string_from_ascii(&data[16..raw_size as usize + 16])),
         invalid => Err(Error::InvalidCompressionType(invalid)),
     }
+}
+
+fn string_from_ascii(data: &[u8]) -> String {
+    let data: Vec<_> = data
+        .iter()
+        .copied()
+        .take_while(|b| *b != 0)
+        .map(u16::from)
+        .collect();
+    String::from_utf16_lossy(&data)
 }
 
 fn convert_to_ascii(rtf: &str) -> Result<Vec<u8>> {
