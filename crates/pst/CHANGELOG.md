@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0](https://github.com/microsoft/outlook-pst-rs/compare/outlook-pst-v1.1.0...outlook-pst-v1.2.0) - 2026-03-17
+
+### Added
+
+- unify open_store logic and dyn traits
+
+### Fixed
+
+- #29
+- HeapId::new parameter validation bug
+- new clippy warnings
+
+### Other
+
+- Merge pull request #44 from alemigo/main
+
 ## [1.1.0](https://github.com/microsoft/outlook-pst-rs/compare/outlook-pst-v1.0.0...outlook-pst-v1.1.0) - 2025-07-01
 
 ### Fixed

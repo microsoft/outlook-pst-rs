@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1](https://github.com/microsoft/outlook-pst-rs/compare/compressed-rtf-v1.0.0...compressed-rtf-v1.0.1) - 2026-03-17
+
+### Fixed
+
+- trim trailing null terminators
+
 ## [1.0.0](https://github.com/microsoft/outlook-pst-rs/releases/tag/compressed-rtf-v1.0.0) - 2025-03-12
 
 ### Added
