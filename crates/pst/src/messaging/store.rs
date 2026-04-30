@@ -381,39 +381,39 @@ where
     }
 
     fn root_hierarchy_table(&self) -> io::Result<Rc<dyn TableContext>> {
-        let hierarchy_table =
-            self.root_hierarchy_table
-                .get_or_init(|| {
-                    let store = self.store.upgrade().ok_or(
-                        MessagingError::StoreRootHierarchyTableFailed(
+        let hierarchy_table = self
+            .root_hierarchy_table
+            .get_or_init(|| {
+                let store =
+                    self.store
+                        .upgrade()
+                        .ok_or(MessagingError::StoreRootHierarchyTableFailed(
                             "Store has been dropped".to_string(),
-                        ),
-                    )?;
-                    let node = {
-                        let mut file = self
-                            .pst
-                            .reader()
-                            .lock()
-                            .map_err(|_| MessagingError::FailedToLockFile)?;
+                        ))?;
+                let node = {
+                    let mut file = self
+                        .pst
+                        .reader()
+                        .lock()
+                        .map_err(|_| MessagingError::FailedToLockFile)?;
 
-                        let file = &mut *file;
-                        let node_id =
-                            NodeId::new(NodeIdType::HierarchyTable, NID_ROOT_FOLDER.index())?;
-                        let mut page_cache = self.pst.node_cache();
-                        let node_key: <Pst as PstFile>::BTreeKey = u32::from(node_id).into();
-                        self.node_btree
-                            .find_entry(file, node_key, &mut page_cache)?
-                    };
+                    let file = &mut *file;
+                    let node_id = NodeId::new(NodeIdType::HierarchyTable, NID_ROOT_FOLDER.index())?;
+                    let mut page_cache = self.pst.node_cache();
+                    let node_key: <Pst as PstFile>::BTreeKey = u32::from(node_id).into();
+                    self.node_btree
+                        .find_entry(file, node_key, &mut page_cache)?
+                };
 
-                    <<Pst as PstFile>::TableContext as TableContextReadWrite<Pst>>::read(
-                        store.clone(),
-                        node,
-                    )
-                })
-                .as_ref()
-                .map_err(|err| format!("{err:?}"))
-                .cloned()
-                .map_err(MessagingError::StoreRootHierarchyTableFailed)?;
+                <<Pst as PstFile>::TableContext as TableContextReadWrite<Pst>>::read(
+                    store.clone(),
+                    node,
+                )
+            })
+            .as_ref()
+            .map_err(|err| format!("{err:?}"))
+            .cloned()
+            .map_err(MessagingError::StoreRootHierarchyTableFailed)?;
 
         Ok(hierarchy_table)
     }
