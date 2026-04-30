@@ -389,19 +389,21 @@ where
                             "Store has been dropped".to_string(),
                         ),
                     )?;
-                    let mut file = self
-                        .pst
-                        .reader()
-                        .lock()
-                        .map_err(|_| MessagingError::FailedToLockFile)?;
+                    let node = {
+                        let mut file = self
+                            .pst
+                            .reader()
+                            .lock()
+                            .map_err(|_| MessagingError::FailedToLockFile)?;
 
-                    let file = &mut *file;
-                    let node_id = NodeId::new(NodeIdType::HierarchyTable, NID_ROOT_FOLDER.index())?;
-                    let mut page_cache = self.pst.node_cache();
-                    let node_key: <Pst as PstFile>::BTreeKey = u32::from(node_id).into();
-                    let node = self
-                        .node_btree
-                        .find_entry(file, node_key, &mut page_cache)?;
+                        let file = &mut *file;
+                        let node_id =
+                            NodeId::new(NodeIdType::HierarchyTable, NID_ROOT_FOLDER.index())?;
+                        let mut page_cache = self.pst.node_cache();
+                        let node_key: <Pst as PstFile>::BTreeKey = u32::from(node_id).into();
+                        self.node_btree
+                            .find_entry(file, node_key, &mut page_cache)?
+                    };
 
                     <<Pst as PstFile>::TableContext as TableContextReadWrite<Pst>>::read(
                         store.clone(),
