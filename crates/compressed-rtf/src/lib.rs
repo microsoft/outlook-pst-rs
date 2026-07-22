@@ -27,7 +27,7 @@ pub enum Error {
     CompressedRtfTooLarge(usize),
     #[error("UNCOMPRESSED RTF too large: {0}")]
     UncompressedRtfTooLarge(usize),
-    #[error("expected COMPRESSETD RTF to be at least 16 bytes, found {0}")]
+    #[error("Expected COMPRESSETD RTF to be at least 16 bytes, found {0}")]
     CompressedRtfTooSmall(usize)
 }
 
