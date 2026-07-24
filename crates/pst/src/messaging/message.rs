@@ -253,10 +253,6 @@ where
                 *root.block_btree(),
             )?;
 
-            let sub_node = node
-                .sub_node()
-                .ok_or(MessagingError::MessageSubNodeTreeNotFound)?;
-
             let mut page_cache = pst.block_cache();
             let data = node.data();
             let heap = <<Pst as PstFile>::HeapNode as HeapNodeReadWrite<Pst>>::read(
@@ -282,12 +278,21 @@ where
                 .collect::<io::Result<BTreeMap<_, _>>>()?;
             let properties = MessageProperties { properties };
 
-            let block = block_btree.find_entry(file, sub_node.search_key(), &mut page_cache)?;
-            let sub_nodes = SubNodeTree::<Pst>::read(file, &block)?;
-            let sub_nodes: BTreeMap<_, _> = sub_nodes
-                .entries(file, &block_btree, &mut page_cache)?
-                .map(|entry| (entry.node(), entry))
-                .collect();
+            // A message can legitimately have no subnode tree (no recipients and
+            // no attachments — common for Task / Contact / Calendar items). Treat a
+            // missing subnode tree as an empty set rather than rejecting the whole
+            // message. [recall fork]
+            let sub_nodes: BTreeMap<_, _> = match node.sub_node() {
+                Some(sub_node) => {
+                    let block =
+                        block_btree.find_entry(file, sub_node.search_key(), &mut page_cache)?;
+                    SubNodeTree::<Pst>::read(file, &block)?
+                        .entries(file, &block_btree, &mut page_cache)?
+                        .map(|entry| (entry.node(), entry))
+                        .collect()
+                }
+                None => BTreeMap::new(),
+            };
 
             (properties, sub_nodes)
         };
