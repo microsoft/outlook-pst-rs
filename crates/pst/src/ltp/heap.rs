@@ -407,7 +407,11 @@ impl HeapNodePageMap {
             return Err(LtpError::InvalidHeapPageAllocCount(alloc_count));
         }
 
-        if free_count != page_map.free_count {
+        // Some third-party PST writers leave cFree at zero even when the
+        // allocation offsets contain freed slots. The offsets remain
+        // sufficient for reading, so accept an omitted count while retaining
+        // strict validation for a nonzero mismatch.
+        if free_count != 0 && free_count != page_map.free_count {
             return Err(LtpError::InvalidHeapPageFreeCount(free_count));
         }
 
@@ -663,5 +667,28 @@ impl HeapNodeReadWrite<AnsiPstFile> for AnsiHeapNode {
     ) -> io::Result<Self> {
         let inner = HeapNodeInner::read(f, block_btree, page_cache, encoding, key)?;
         Ok(Self { inner })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_an_omitted_free_count() {
+        let offsets = HeapNodePageAllocOffsets::new(vec![10, 10, 20]);
+
+        let page_map = HeapNodePageMap::new(2, 0, offsets).unwrap();
+
+        assert_eq!(page_map.allocations().len(), 2);
+    }
+
+    #[test]
+    fn rejects_an_incorrect_nonzero_free_count() {
+        let offsets = HeapNodePageAllocOffsets::new(vec![10, 10, 20]);
+
+        let result = HeapNodePageMap::new(2, 2, offsets);
+
+        assert!(matches!(result, Err(LtpError::InvalidHeapPageFreeCount(2))));
     }
 }
