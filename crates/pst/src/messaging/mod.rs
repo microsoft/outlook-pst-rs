@@ -128,6 +128,8 @@ pub enum MessagingError {
     AttachmentSubNodeNotFound(crate::ndb::node_id::NodeId),
     #[error("Missing PidTagAttachDataObject on afEmbeddedMessage attachment")]
     AttachmentMessageObjectDataNotFound,
+    #[error("Multiple NID_TYPE_NORMAL_MESSAGE sub-nodes on afEmbeddedMessage attachment")]
+    MultipleAttachmentEmbeddedMessages,
     #[error("Invalid PidTagAttachDataObject on afEmbeddedMessage attachment: {0:?}")]
     InvalidMessageObjectData(crate::ltp::prop_type::PropertyType),
     #[error("Missing PidTagAttachDataBinary on afByValue attachment")]
