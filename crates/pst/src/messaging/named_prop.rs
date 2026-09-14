@@ -112,6 +112,16 @@ pub const PS_PUBLIC_STRINGS: GuidValue = GuidValue::new(
     [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
 );
 
+/// `PSETID_Appointment` {00062002-0000-0000-C000-000000000046} — the property
+/// set holding calendar named properties (start/end/location/recurrence).
+/// [recall fork]
+pub const PSETID_APPOINTMENT: GuidValue = GuidValue::new(
+    0x00062002,
+    0x0000,
+    0x0000,
+    [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+);
+
 #[derive(Clone, Default, Debug)]
 pub struct StringEntry {
     size: u32,
@@ -261,6 +271,47 @@ impl NamedPropertyMapProperties {
 
     pub fn iter(&self) -> impl Iterator<Item = (&u16, &PropertyValue)> {
         self.properties.iter()
+    }
+
+    /// Resolve a numeric named property — a `(property-set GUID, LID)` pair — to
+    /// its file-specific property id (>= 0x8000), or `None` if this file does not
+    /// define it. The raw primitives (`hash_bucket` / `stream_guid`) leave this
+    /// lookup to the caller; this is what a consumer needs to read calendar /
+    /// task / contact named properties off a message (e.g.
+    /// `resolve_number(PSETID_APPOINTMENT, 0x820D)` for the appointment start).
+    /// [recall fork]
+    pub fn resolve_number(&self, set: GuidValue, lid: u32) -> io::Result<Option<u16>> {
+        let guid = match self.find_guid(set)? {
+            Some(guid) => guid,
+            None => return Ok(None),
+        };
+        let query = NameIdEntry::new(
+            NamedPropertyId::Number(lid),
+            guid,
+            NamedPropertyIndex::try_from(0)?,
+        );
+        Ok(self
+            .hash_bucket(&query)?
+            .into_iter()
+            .find(|entry| entry.id() == NamedPropertyId::Number(lid) && entry.guid() == guid)
+            .map(|entry| entry.prop_id()))
+    }
+
+    /// Map a property-set GUID to its `NamedPropertyGuid` handle: the two
+    /// well-known sets, else its 0-based position in the GUID stream — which is
+    /// exactly the `GuidIndex` the entries encode (wGuid = index + 3). [recall fork]
+    fn find_guid(&self, set: GuidValue) -> io::Result<Option<NamedPropertyGuid>> {
+        if set == PS_MAPI {
+            return Ok(Some(NamedPropertyGuid::Mapi));
+        }
+        if set == PS_PUBLIC_STRINGS {
+            return Ok(Some(NamedPropertyGuid::PublicStrings));
+        }
+        Ok(self
+            .stream_guid()?
+            .iter()
+            .position(|guid| *guid == set)
+            .map(|index| NamedPropertyGuid::GuidIndex(index as u16)))
     }
 
     pub fn hash_entry(&self, entry: NameIdEntry) -> io::Result<NameIdEntry> {
@@ -457,6 +508,13 @@ impl NamedPropertyMapProperties {
 pub trait NamedPropertyMap {
     fn store(&self) -> Rc<dyn Store>;
     fn properties(&self) -> &NamedPropertyMapProperties;
+
+    /// Resolve a numeric named property `(property-set GUID, LID)` to its
+    /// file-specific property id (>= 0x8000), or `None` if undefined here.
+    /// [recall fork]
+    fn resolve_number(&self, set: GuidValue, lid: u32) -> io::Result<Option<u16>> {
+        self.properties().resolve_number(set, lid)
+    }
 }
 
 struct NamedPropertyMapInner<Pst>

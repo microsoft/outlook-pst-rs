@@ -251,7 +251,7 @@ impl Debug for UnicodeValue {
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub struct GuidValue {
     data1: u32,
     data2: u16,

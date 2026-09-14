@@ -207,17 +207,14 @@ impl HeaderReadWrite<UnicodePstFile> for UnicodeHeader {
             return Err(NdbError::InvalidNdbHeaderClientVersion(version).into());
         }
 
-        // bPlatformCreate
-        let platform_create = cursor.read_u8()?;
-        if platform_create != NDB_PLATFORM_CREATE {
-            return Err(NdbError::InvalidNdbHeaderPlatformCreate(platform_create).into());
-        }
+        // bPlatformCreate — [MS-PST] says MUST be 0x01, but real archives from
+        // older Outlook and third-party exporters carry other values (e.g. 0x02).
+        // Read and ignore rather than reject the whole file. [recall fork]
+        let _platform_create = cursor.read_u8()?;
 
-        // bPlatformAccess
-        let platform_access = cursor.read_u8()?;
-        if platform_access != NDB_PLATFORM_ACCESS {
-            return Err(NdbError::InvalidNdbHeaderPlatformAccess(platform_access).into());
-        }
+        // bPlatformAccess — same real-world tolerance as bPlatformCreate.
+        // [recall fork]
+        let _platform_access = cursor.read_u8()?;
 
         // dwReserved1
         let reserved1 = cursor.read_u32::<LittleEndian>()?;
@@ -476,17 +473,14 @@ impl HeaderReadWrite<AnsiPstFile> for AnsiHeader {
             return Err(NdbError::InvalidNdbHeaderClientVersion(version).into());
         }
 
-        // bPlatformCreate
-        let platform_create = cursor.read_u8()?;
-        if platform_create != NDB_PLATFORM_CREATE {
-            return Err(NdbError::InvalidNdbHeaderPlatformCreate(platform_create).into());
-        }
+        // bPlatformCreate — [MS-PST] says MUST be 0x01, but real archives from
+        // older Outlook and third-party exporters carry other values (e.g. 0x02).
+        // Read and ignore rather than reject the whole file. [recall fork]
+        let _platform_create = cursor.read_u8()?;
 
-        // bPlatformAccess
-        let platform_access = cursor.read_u8()?;
-        if platform_access != NDB_PLATFORM_ACCESS {
-            return Err(NdbError::InvalidNdbHeaderPlatformAccess(platform_access).into());
-        }
+        // bPlatformAccess — same real-world tolerance as bPlatformCreate.
+        // [recall fork]
+        let _platform_access = cursor.read_u8()?;
 
         // dwReserved1
         let reserved1 = cursor.read_u32::<LittleEndian>()?;
