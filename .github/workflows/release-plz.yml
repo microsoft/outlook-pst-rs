@@ -28,7 +28,7 @@ jobs:
         id: auth
 
       - name: Run release-plz
-        uses: MarcoIeni/release-plz-action@064f4d1e36c843611ddf013be726beaa4ad804db # v0.5.129
+        uses: MarcoIeni/release-plz-action@346832d73e3415c2ebd0432cba3a2bf5881e5f7d # v0.5.135
         with:
           command: release
         env:
