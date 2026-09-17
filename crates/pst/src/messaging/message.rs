@@ -4,14 +4,9 @@ use std::{collections::BTreeMap, io, rc::Rc};
 
 use super::{read_write::*, store::*, *};
 use crate::{
-    ltp::{
-        heap::HeapNode,
-        prop_context::{PropertyContext, PropertyValue},
-        prop_type::PropertyType,
-        read_write::*,
-        table_context::TableContext,
-    },
-    ndb::{
+    AnsiPstFile, PstFile, PstFileLock, UnicodePstFile, ltp::{
+        heap::HeapNode, prop_context::{BinaryValue, PropertyContext, PropertyValue}, prop_type::PropertyType, read_write::*, table_context::TableContext,
+    }, ndb::{
         block::{IntermediateTreeBlock, LeafSubNodeTreeEntry, SubNodeTree},
         block_id::BlockId,
         header::Header,
@@ -20,7 +15,6 @@ use crate::{
         read_write::*,
         root::Root,
     },
-    AnsiPstFile, PstFile, PstFileLock, UnicodePstFile,
 };
 
 #[derive(Default, Debug)]
@@ -268,16 +262,25 @@ where
             )?;
             let header = heap.header()?;
 
+            let entry_id = store.properties().make_entry_id(node.node())?;
+            let entry_id_bytes: Vec<u8> = (&entry_id).try_into()?;
+
             let tree = <Pst as PstFile>::PropertyTree::new(heap, header.user_root());
             let prop_context = <Pst as PstFile>::PropertyContext::new(node, tree);
             let properties = prop_context
                 .properties()?
                 .into_iter()
-                .filter(|(prop_id, _)| prop_ids.is_none_or(|ids| ids.contains(prop_id)))
                 .map(|(prop_id, record)| {
                     prop_context
                         .read_property(file, encoding, &block_btree, &mut page_cache, record)
                         .map(|value| (prop_id, value))
+                })
+                .chain([Ok((0x0FFF, PropertyValue::Binary(BinaryValue::new(entry_id_bytes))))])
+                .filter(|result| {
+                    result
+                        .as_ref()
+                        .is_ok_and(|(prop_id, _)| prop_ids.is_none_or(|ids| ids.contains(prop_id)))
+                        || result.is_err()
                 })
                 .collect::<io::Result<BTreeMap<_, _>>>()?;
             let properties = MessageProperties { properties };
