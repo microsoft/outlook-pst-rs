@@ -9,9 +9,10 @@ use crate::{
         prop_context::{BinaryValue, PropertyContext, PropertyValue},
         prop_type::PropertyType,
         read_write::*,
+        table_context::{TableContext, TableRowId},
     },
     ndb::{
-        block::{DataTree, IntermediateTreeBlock},
+        block::{DataTree, IntermediateTreeBlock, SubNodeTree},
         block_id::BlockId,
         header::Header,
         node_id::{NodeId, NodeIdType},
@@ -77,6 +78,29 @@ impl AttachmentProperties {
                     .into(),
             ),
         }
+    }
+}
+
+/// Read `PidTagAttachMethod` from the parent message's attachment table row for this attachment.
+///
+/// Some writers omit the property from the
+/// [Attachment object PC](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/af7dcc38-920d-4f93-ae9e-a58e00d223b9)
+/// while still filling the column in the
+/// [Attachment Table](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/9770fee7-a353-4f55-9046-4f9ef9e9d4a0),
+/// whose row ID is the attachment sub-node. Every failure of this kind seen in practice has been
+/// an `afEmbeddedMessage` attachment, so without this fallback embedded messages are unreadable.
+fn attachment_method_from_table(table: &dyn TableContext, sub_node: NodeId) -> Option<i32> {
+    let context = table.context();
+    let row = table.find_row(TableRowId::new(u32::from(sub_node))).ok()?;
+    let values = row.columns(context).ok()?;
+    let (column, value) = context
+        .columns()
+        .iter()
+        .zip(values)
+        .find(|(column, _)| column.prop_id() == 0x3705)?;
+    match table.read_column(&value?, column.prop_type()).ok()? {
+        PropertyValue::Integer32(value) => Some(value),
+        _ => None,
     }
 }
 
@@ -173,15 +197,23 @@ where
     <<Pst as PstFile>::BlockBTree as RootBTree>::LeafPage:
         RootBTreeLeafPageReadWrite<Pst> + BTreePageReadWrite,
     <Pst as PstFile>::BlockTrailer: BlockTrailerReadWrite,
+    <Pst as PstFile>::SubNodeTreeBlockHeader: IntermediateTreeHeaderReadWrite,
+    <Pst as PstFile>::SubNodeTreeBlock: IntermediateTreeBlockReadWrite,
+    <<Pst as PstFile>::SubNodeTreeBlock as IntermediateTreeBlock>::Entry:
+        IntermediateTreeEntryReadWrite,
+    <Pst as PstFile>::SubNodeBlock: IntermediateTreeBlockReadWrite,
+    <<Pst as PstFile>::SubNodeBlock as IntermediateTreeBlock>::Entry:
+        IntermediateTreeEntryReadWrite,
+    <Pst as PstFile>::HeapNode: HeapNodeReadWrite<Pst>,
+    <Pst as PstFile>::PropertyTree: HeapTreeReadWrite<Pst>,
+    <Pst as PstFile>::PropertyContext: PropertyContextReadWrite<Pst>,
+    <Pst as PstFile>::Store: StoreReadWrite<Pst>,
     <Pst as PstFile>::DataTreeBlock: IntermediateTreeBlockReadWrite,
     <<Pst as PstFile>::DataTreeBlock as IntermediateTreeBlock>::Entry:
         IntermediateTreeEntryReadWrite,
     <Pst as PstFile>::DataBlock: BlockReadWrite + Clone,
     <Pst as PstFile>::HeapNode: HeapNodeReadWrite<Pst>,
-    <Pst as PstFile>::PropertyTree: HeapTreeReadWrite<Pst>,
-    <Pst as PstFile>::PropertyContext: PropertyContextReadWrite<Pst>,
-    <Pst as PstFile>::Store: StoreReadWrite<Pst>,
-    <Pst as PstFile>::Message: MessageReadWrite<Pst> + 'static,
+    <Pst as PstFile>::Message: Message + MessageReadWrite<Pst> + 'static,
 {
     fn read(
         message: Rc<<Pst as PstFile>::Message>,
@@ -201,6 +233,7 @@ where
         let header = pst.header();
         let root = header.root();
 
+        let mut embedded_node: Option<<Pst as PstFile>::NodeBTreeEntry> = None;
         let (properties, data) = {
             let mut file = pst
                 .reader()
@@ -224,6 +257,7 @@ where
                 node.sub_node(),
                 None,
             );
+            let attachment_sub_nodes = node.sub_node();
 
             let mut page_cache = pst.block_cache();
             let data = node.data();
@@ -251,7 +285,14 @@ where
                 .collect::<io::Result<BTreeMap<_, _>>>()?;
             let properties = AttachmentProperties { properties };
 
-            let attachment_method = AttachmentMethod::try_from(properties.attachment_method()?)?;
+            let attachment_method = match properties.get(0x3705) {
+                Some(_) => properties.attachment_method()?,
+                None => message
+                    .attachment_table()
+                    .and_then(|table| attachment_method_from_table(table.as_ref(), sub_node))
+                    .ok_or(MessagingError::AttachmentMethodNotFound)?,
+            };
+            let attachment_method = AttachmentMethod::try_from(attachment_method)?;
             let data = match attachment_method {
                 AttachmentMethod::ByValue => {
                     let binary_data = match properties
@@ -269,37 +310,64 @@ where
                     Some(AttachmentData::Binary(binary_data.clone()))
                 }
                 AttachmentMethod::EmbeddedMessage => {
-                    let object_data = match properties
-                        .get(0x3701)
-                        .ok_or(MessagingError::AttachmentMessageObjectDataNotFound)?
-                    {
-                        PropertyValue::Object(value) => value,
-                        invalid => {
+                    let node = match properties.get(0x3701) {
+                        Some(PropertyValue::Object(object_data)) => {
+                            let sub_node = object_data.node();
+                            let node = message
+                                .sub_nodes()
+                                .get(&sub_node)
+                                .ok_or(MessagingError::AttachmentSubNodeNotFound(sub_node))?;
+                            <<Pst as PstFile>::NodeBTreeEntry as NodeBTreeEntryReadWrite>::new(
+                                node.node(),
+                                node.block(),
+                                node.sub_node(),
+                                None,
+                            )
+                        }
+                        Some(invalid) => {
                             return Err(MessagingError::InvalidMessageObjectData(
                                 PropertyType::from(invalid),
                             )
                             .into())
                         }
+                        None => {
+                            // The same writers omit PidTagAttachDataObject too. The object data
+                            // lives in the sub-node of the attachment object node ([MS-PST]
+                            // 2.4.6.2), where the embedded message is the single
+                            // NID_TYPE_NORMAL_MESSAGE entry.
+                            let sub_nodes = attachment_sub_nodes
+                                .ok_or(MessagingError::AttachmentMessageObjectDataNotFound)?;
+                            let block = block_btree.find_entry(
+                                file,
+                                sub_nodes.search_key(),
+                                &mut page_cache,
+                            )?;
+                            let sub_nodes = SubNodeTree::<Pst>::read(file, &block)?;
+                            let mut embedded = sub_nodes
+                                .entries(file, &block_btree, &mut page_cache)?
+                                .filter(|entry| {
+                                    entry.node().id_type().ok() == Some(NodeIdType::NormalMessage)
+                                });
+                            let entry = embedded
+                                .next()
+                                .ok_or(MessagingError::AttachmentMessageObjectDataNotFound)?;
+                            if embedded.next().is_some() {
+                                return Err(
+                                    MessagingError::MultipleAttachmentEmbeddedMessages.into()
+                                );
+                            }
+                            <<Pst as PstFile>::NodeBTreeEntry as NodeBTreeEntryReadWrite>::new(
+                                entry.node(),
+                                entry.block(),
+                                entry.sub_node(),
+                                None,
+                            )
+                        }
                     };
-
-                    let sub_node = object_data.node();
-                    let node = message
-                        .sub_nodes()
-                        .get(&sub_node)
-                        .ok_or(MessagingError::AttachmentSubNodeNotFound(sub_node))?;
-                    let node = <<Pst as PstFile>::NodeBTreeEntry as NodeBTreeEntryReadWrite>::new(
-                        node.node(),
-                        node.block(),
-                        node.sub_node(),
-                        None,
-                    );
-                    let message =
-                        <<Pst as PstFile>::Message as MessageReadWrite<Pst>>::read_embedded(
-                            store.clone(),
-                            node,
-                            prop_ids,
-                        )?;
-                    Some(AttachmentData::Message(message))
+                    // Read it after the file lock is released below: `read_embedded` takes
+                    // the same lock, and `std::sync::Mutex` is not reentrant.
+                    embedded_node = Some(node);
+                    None
                 }
                 AttachmentMethod::Storage => {
                     let object_data = match properties
@@ -338,6 +406,18 @@ where
             };
 
             (properties, data)
+        };
+
+        let data = match embedded_node {
+            Some(node) => {
+                let message = <<Pst as PstFile>::Message as MessageReadWrite<Pst>>::read_embedded(
+                    store.clone(),
+                    node,
+                    prop_ids,
+                )?;
+                Some(AttachmentData::Message(message))
+            }
+            None => data,
         };
 
         Ok(Self {
