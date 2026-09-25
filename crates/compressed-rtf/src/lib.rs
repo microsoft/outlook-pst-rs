@@ -27,6 +27,8 @@ pub enum Error {
     CompressedRtfTooLarge(usize),
     #[error("UNCOMPRESSED RTF too large: {0}")]
     UncompressedRtfTooLarge(usize),
+    #[error("Expected COMPRESSETD RTF to be at least 16 bytes, found {0}")]
+    CompressedRtfTooSmall(usize)
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -36,6 +38,9 @@ const UNCOMPRESSED: u32 = 0x414C454D;
 
 pub fn decompress_rtf(data: &[u8]) -> Result<String> {
     let total_size = data.len();
+    if total_size < 16 {
+        return Err(Error::CompressedRtfTooSmall(total_size));
+    }
     let mut cursor = Cursor::new(&data[..16]);
     let compressed_size = cursor.read_u32::<LittleEndian>()?;
 
@@ -79,7 +84,7 @@ pub fn decompress_rtf(data: &[u8]) -> Result<String> {
 
             Ok(string_from_ascii(&output))
         }
-        UNCOMPRESSED => Ok(string_from_ascii(&data[16..raw_size as usize + 16])),
+        UNCOMPRESSED => Ok(string_from_ascii(&data[16..])),
         invalid => Err(Error::InvalidCompressionType(invalid)),
     }
 }
