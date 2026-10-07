@@ -4,9 +4,14 @@ use std::{collections::BTreeMap, io, rc::Rc};
 
 use super::{read_write::*, store::*, *};
 use crate::{
-    AnsiPstFile, PstFile, PstFileLock, UnicodePstFile, ltp::{
-        heap::HeapNode, prop_context::{BinaryValue, PropertyContext, PropertyValue}, prop_type::PropertyType, read_write::*, table_context::TableContext,
-    }, ndb::{
+    ltp::{
+        heap::HeapNode,
+        prop_context::{BinaryValue, PropertyContext, PropertyValue},
+        prop_type::PropertyType,
+        read_write::*,
+        table_context::TableContext,
+    },
+    ndb::{
         block::{IntermediateTreeBlock, LeafSubNodeTreeEntry, SubNodeTree},
         block_id::BlockId,
         header::Header,
@@ -15,6 +20,7 @@ use crate::{
         read_write::*,
         root::Root,
     },
+    AnsiPstFile, PstFile, PstFileLock, UnicodePstFile,
 };
 
 #[derive(Default, Debug)]
@@ -29,6 +35,20 @@ impl MessageProperties {
 
     pub fn iter(&self) -> impl Iterator<Item = (&u16, &PropertyValue)> {
         self.properties.iter()
+    }
+
+    pub fn entry_id(&self) -> io::Result<EntryId> {
+        let entry_id: EntryId = self
+            .properties
+            .get(&0x0FFF)
+            .ok_or(MessagingError::MessageEntryIdNotFound)
+            .and_then(|v| match v {
+                PropertyValue::Binary(value) => EntryId::try_from(value.buffer())
+                    .map_err(|err| MessagingError::InvalidEntryIdBuffer(err)),
+                invalid => Err(MessagingError::InvalidEntryId(PropertyType::from(invalid)).into()),
+            })?;
+
+        Ok(entry_id)
     }
 
     pub fn message_class(&self) -> io::Result<String> {
@@ -275,7 +295,10 @@ where
                         .read_property(file, encoding, &block_btree, &mut page_cache, record)
                         .map(|value| (prop_id, value))
                 })
-                .chain([Ok((0x0FFF, PropertyValue::Binary(BinaryValue::new(entry_id_bytes))))])
+                .chain([Ok((
+                    0x0FFF,
+                    PropertyValue::Binary(BinaryValue::new(entry_id_bytes)),
+                ))])
                 .filter(|result| {
                     result
                         .as_ref()

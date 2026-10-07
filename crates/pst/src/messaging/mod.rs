@@ -76,6 +76,12 @@ pub enum MessagingError {
     MessageClassNotFound,
     #[error("Invalid PidTagMessageClass on message: {0:?}")]
     InvalidMessageClass(crate::ltp::prop_type::PropertyType),
+    #[error("Missing EntryId on message")]
+    MessageEntryIdNotFound,
+    #[error("Invalid EntryId on message: {0:?}")]
+    InvalidEntryId(crate::ltp::prop_type::PropertyType),
+    #[error("Invalid EntryId buffer on message")]
+    InvalidEntryIdBuffer(io::Error),
     #[error("Missing PidTagMessageFlags on message")]
     MessageFlagsNotFound,
     #[error("Invalid PidTagMessageFlags on message: {0:?}")]
