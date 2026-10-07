@@ -6,7 +6,7 @@ use super::{read_write::*, store::*, *};
 use crate::{
     ltp::{
         heap::HeapNode,
-        prop_context::{PropertyContext, PropertyValue},
+        prop_context::{BinaryValue, PropertyContext, PropertyValue},
         prop_type::PropertyType,
         read_write::*,
         table_context::TableContext,
@@ -35,6 +35,20 @@ impl MessageProperties {
 
     pub fn iter(&self) -> impl Iterator<Item = (&u16, &PropertyValue)> {
         self.properties.iter()
+    }
+
+    pub fn entry_id(&self) -> io::Result<EntryId> {
+        let entry_id: EntryId = self
+            .properties
+            .get(&0x0FFF)
+            .ok_or(MessagingError::MessageEntryIdNotFound)
+            .and_then(|v| match v {
+                PropertyValue::Binary(value) => EntryId::try_from(value.buffer())
+                    .map_err(|err| MessagingError::InvalidEntryIdBuffer(err)),
+                invalid => Err(MessagingError::InvalidEntryId(PropertyType::from(invalid)).into()),
+            })?;
+
+        Ok(entry_id)
     }
 
     pub fn message_class(&self) -> io::Result<String> {
@@ -268,16 +282,28 @@ where
             )?;
             let header = heap.header()?;
 
+            let entry_id = store.properties().make_entry_id(node.node())?;
+            let entry_id_bytes: Vec<u8> = (&entry_id).try_into()?;
+
             let tree = <Pst as PstFile>::PropertyTree::new(heap, header.user_root());
             let prop_context = <Pst as PstFile>::PropertyContext::new(node, tree);
             let properties = prop_context
                 .properties()?
                 .into_iter()
-                .filter(|(prop_id, _)| prop_ids.is_none_or(|ids| ids.contains(prop_id)))
                 .map(|(prop_id, record)| {
                     prop_context
                         .read_property(file, encoding, &block_btree, &mut page_cache, record)
                         .map(|value| (prop_id, value))
+                })
+                .chain([Ok((
+                    0x0FFF,
+                    PropertyValue::Binary(BinaryValue::new(entry_id_bytes)),
+                ))])
+                .filter(|result| {
+                    result
+                        .as_ref()
+                        .is_ok_and(|(prop_id, _)| prop_ids.is_none_or(|ids| ids.contains(prop_id)))
+                        || result.is_err()
                 })
                 .collect::<io::Result<BTreeMap<_, _>>>()?;
             let properties = MessageProperties { properties };
