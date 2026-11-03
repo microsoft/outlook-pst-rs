@@ -407,8 +407,15 @@ impl HeapNodePageMap {
             return Err(LtpError::InvalidHeapPageAllocCount(alloc_count));
         }
 
+        // cFree only counts freed allocations, which reading never uses, and
+        // real files carry a stale value (the EDRM Enron PSTs have freed items
+        // with cFree = 0), so trust the allocation table instead.
         if free_count != page_map.free_count {
-            return Err(LtpError::InvalidHeapPageFreeCount(free_count));
+            tracing::debug!(
+                expected = page_map.free_count,
+                actual = free_count,
+                "HNPAGEMAP cFree does not match the allocation table"
+            );
         }
 
         Ok(page_map)
