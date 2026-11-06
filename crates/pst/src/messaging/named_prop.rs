@@ -270,7 +270,7 @@ impl NamedPropertyMapProperties {
                 let string_entry = self.lookup_string(*offset)?;
                 let hash_value =
                     NamedPropertyId::StringOffset(compute_crc(0, string_entry.buffer()));
-                NameIdEntry::new(hash_value, NamedPropertyGuid::None, entry.prop_index)
+                NameIdEntry::new(hash_value, entry.guid, entry.prop_index)
             }
         })
     }
@@ -595,5 +595,39 @@ impl NamedPropertyMapReadWrite<AnsiPstFile> for AnsiNamedPropertyMap {
     fn read(store: Rc<AnsiStore>) -> io::Result<Rc<Self>> {
         let inner = NamedPropertyMapInner::read(store)?;
         Ok(Rc::new(Self { inner }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ltp::prop_context::BinaryValue;
+
+    #[test]
+    fn test_hash_entry_keeps_guid() {
+        let name: Vec<u8> = "Keywords"
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+        let mut stream = (name.len() as u32).to_le_bytes().to_vec();
+        stream.extend_from_slice(&name);
+        let map = NamedPropertyMapProperties {
+            properties: BTreeMap::from([(0x0004, PropertyValue::Binary(BinaryValue::new(stream)))]),
+        };
+
+        let prop_index = NamedPropertyIndex::try_from(0).unwrap();
+        let entry = NameIdEntry::new(
+            NamedPropertyId::StringOffset(0),
+            NamedPropertyGuid::PublicStrings,
+            prop_index,
+        );
+        assert_eq!(
+            map.hash_entry(entry).unwrap(),
+            NameIdEntry::new(
+                NamedPropertyId::StringOffset(compute_crc(0, &name)),
+                NamedPropertyGuid::PublicStrings,
+                prop_index,
+            )
+        );
     }
 }
