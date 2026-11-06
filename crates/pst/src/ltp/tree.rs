@@ -60,6 +60,24 @@ impl HeapTreeHeader {
     }
 }
 
+/// Read every record of a BTH page. A record that doesn't parse is an error, because stopping at
+/// it would silently drop every record after it.
+fn read_records<T: HeapNodePageReadWrite>(
+    data: &[u8],
+    key_size: u8,
+    entry_size: u8,
+) -> io::Result<Vec<T>> {
+    let record_size = usize::from(key_size) + usize::from(entry_size);
+    if data.len() % record_size != 0 {
+        return Err(LtpError::InvalidHeapTreeDataSize(entry_size).into());
+    }
+
+    let mut cursor = Cursor::new(data);
+    (0..data.len() / record_size)
+        .map(|_| T::read(&mut cursor))
+        .collect()
+}
+
 pub trait HeapTreeEntryKey: Copy + Sized + PartialEq + PartialOrd {
     const SIZE: u8;
 }
@@ -244,10 +262,13 @@ where
 
         while level > 0 {
             for heap_id in mem::take(&mut next_level).into_iter() {
-                let mut cursor = Cursor::new(self.heap.find_entry(heap_id)?);
-                while let Ok(row) = HeapTreeIntermediateEntry::<K>::read(&mut cursor) {
-                    next_level.push(row.next_level());
-                }
+                let rows = read_records::<HeapTreeIntermediateEntry<K>>(
+                    self.heap.find_entry(heap_id)?,
+                    K::SIZE,
+                    // An intermediate record's value is an HID.
+                    4,
+                )?;
+                next_level.extend(rows.into_iter().map(|row| row.next_level()));
             }
 
             level -= 1;
@@ -255,10 +276,11 @@ where
 
         let mut results = Vec::new();
         for heap_id in mem::take(&mut next_level).into_iter() {
-            let mut cursor = Cursor::new(self.heap.find_entry(heap_id)?);
-            while let Ok(row) = HeapTreeLeafEntry::<K, V>::read(&mut cursor) {
-                results.push(row);
-            }
+            results.extend(read_records::<HeapTreeLeafEntry<K, V>>(
+                self.heap.find_entry(heap_id)?,
+                K::SIZE,
+                V::SIZE,
+            )?);
         }
 
         Ok(results)
@@ -370,5 +392,46 @@ where
 {
     fn from(value: AnsiHeapTree<K, V>) -> Self {
         value.inner.heap
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::prop_context::{PropertyTreeRecordKey, PropertyTreeRecordValue};
+    use super::*;
+
+    type Record = HeapTreeLeafEntry<PropertyTreeRecordKey, PropertyTreeRecordValue>;
+
+    fn record(prop_id: u16, prop_type: u16, value: u32) -> Vec<u8> {
+        let mut bytes = prop_id.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&prop_type.to_le_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn test_read_every_record() {
+        let data = [record(0x0E07, 0x0003, 1), record(0x0E08, 0x0003, 2)].concat();
+        let records = read_records::<Record>(&data, 2, 6).unwrap();
+        assert_eq!(records.len(), 2);
+    }
+
+    #[test]
+    fn test_record_that_does_not_parse_is_an_error() {
+        // 0x0099 is not a property type; the record after it must not be dropped silently.
+        let data = [
+            record(0x0E07, 0x0003, 1),
+            record(0x0E08, 0x0099, 2),
+            record(0x0E17, 0x0003, 3),
+        ]
+        .concat();
+        assert!(read_records::<Record>(&data, 2, 6).is_err());
+    }
+
+    #[test]
+    fn test_partial_record_is_an_error() {
+        let mut data = record(0x0E07, 0x0003, 1);
+        data.extend_from_slice(&[0x08, 0x0E, 0x03]);
+        assert!(read_records::<Record>(&data, 2, 6).is_err());
     }
 }
