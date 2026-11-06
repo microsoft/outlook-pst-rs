@@ -213,6 +213,7 @@ impl HeapFillLevel {
     fn pack_fill_levels(fill_levels: &[HeapFillLevel; 8]) -> u32 {
         fill_levels
             .iter()
+            .rev()
             .fold(0, |acc, &x| (acc << 4) | (x as u32))
     }
 }
@@ -663,5 +664,27 @@ impl HeapNodeReadWrite<AnsiPstFile> for AnsiHeapNode {
     ) -> io::Result<Self> {
         let inner = HeapNodeInner::read(f, block_btree, page_cache, encoding, key)?;
         Ok(Self { inner })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fill_levels_round_trip() {
+        let fill_levels = [
+            HeapFillLevel::Level1,
+            HeapFillLevel::Level2,
+            HeapFillLevel::Level3,
+            HeapFillLevel::Level4,
+            HeapFillLevel::Level5,
+            HeapFillLevel::Level6,
+            HeapFillLevel::Level7,
+            HeapFillLevel::Level8,
+        ];
+        let packed = HeapFillLevel::pack_fill_levels(&fill_levels);
+        assert_eq!(packed, 0x8765_4321);
+        assert_eq!(HeapFillLevel::unpack_fill_levels(packed), fill_levels);
     }
 }
