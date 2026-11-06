@@ -441,6 +441,31 @@ pub enum PropertyValue {
     MultipleBinary(Vec<BinaryValue>),
 }
 
+impl PropertyValue {
+    /// Outlook stores an empty variable-size or multi-valued property with an HNID of 0, so it
+    /// reads as the empty value of its type. Any other type reads as [PropertyValue::Null].
+    pub(crate) fn empty(prop_type: PropertyType) -> Self {
+        match prop_type {
+            PropertyType::String8 => Self::String8(Default::default()),
+            PropertyType::Unicode => Self::Unicode(Default::default()),
+            PropertyType::Binary => Self::Binary(Default::default()),
+            PropertyType::MultipleInteger16 => Self::MultipleInteger16(Vec::new()),
+            PropertyType::MultipleInteger32 => Self::MultipleInteger32(Vec::new()),
+            PropertyType::MultipleFloating32 => Self::MultipleFloating32(Vec::new()),
+            PropertyType::MultipleFloating64 => Self::MultipleFloating64(Vec::new()),
+            PropertyType::MultipleCurrency => Self::MultipleCurrency(Vec::new()),
+            PropertyType::MultipleFloatingTime => Self::MultipleFloatingTime(Vec::new()),
+            PropertyType::MultipleInteger64 => Self::MultipleInteger64(Vec::new()),
+            PropertyType::MultipleString8 => Self::MultipleString8(Vec::new()),
+            PropertyType::MultipleUnicode => Self::MultipleUnicode(Vec::new()),
+            PropertyType::MultipleTime => Self::MultipleTime(Vec::new()),
+            PropertyType::MultipleGuid => Self::MultipleGuid(Vec::new()),
+            PropertyType::MultipleBinary => Self::MultipleBinary(Vec::new()),
+            _ => Self::Null,
+        }
+    }
+}
+
 impl From<&PropertyValue> for PropertyType {
     fn from(value: &PropertyValue) -> Self {
         match value {
@@ -1036,7 +1061,7 @@ where
         match value.value() {
             PropertyValueRecord::Heap(heap_id) => {
                 if u32::from(heap_id) == 0 {
-                    return Ok(PropertyValue::Null);
+                    return Ok(PropertyValue::empty(value.prop_type()));
                 }
 
                 let data = self.tree.heap().find_entry(heap_id)?;
@@ -1189,5 +1214,19 @@ impl PropertyContextReadWrite<AnsiPstFile> for AnsiPropertyContext {
     ) -> io::Result<PropertyValue> {
         self.inner
             .read_property(f, encoding, block_btree, page_cache, value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{ndb::node_id::NID_ROOT_FOLDER, open_store};
+
+    #[test]
+    fn test_hnid_zero_is_empty_string() {
+        // The root folder of Empty.pst stores its empty display name with an HNID of 0.
+        let store = open_store(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/Empty.pst")).unwrap();
+        let entry_id = store.properties().make_entry_id(NID_ROOT_FOLDER).unwrap();
+        let folder = store.open_folder(&entry_id).unwrap();
+        assert_eq!(folder.properties().display_name().unwrap(), "");
     }
 }

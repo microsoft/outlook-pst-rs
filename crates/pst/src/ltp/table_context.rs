@@ -998,6 +998,9 @@ where
     ) -> io::Result<PropertyValue> {
         match value {
             TableRowColumnValue::Small(small) => Ok(small.clone()),
+            TableRowColumnValue::Heap(heap_id) if <u32 as From<HeapId>>::from(*heap_id) == 0 => {
+                Ok(PropertyValue::empty(prop_type))
+            }
             TableRowColumnValue::Heap(heap_id) => {
                 let data = self.heap.find_entry(*heap_id)?;
                 let mut cursor = Cursor::new(data);
@@ -1154,5 +1157,24 @@ impl TableContextReadWrite<AnsiPstFile> for AnsiTableContext {
     fn read(store: Rc<AnsiStore>, node: AnsiNodeBTreeEntry) -> io::Result<Rc<dyn TableContext>> {
         let inner = TableContextInner::read(store, node)?;
         Ok(Rc::new(Self { inner }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::open_store;
+
+    #[test]
+    fn test_hnid_zero_cell_is_empty_string() {
+        let store = open_store(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/Empty.pst")).unwrap();
+        let table = store.root_hierarchy_table().unwrap();
+        let value = table
+            .read_column(
+                &TableRowColumnValue::Heap(HeapId::from(0)),
+                PropertyType::Unicode,
+            )
+            .unwrap();
+        assert!(matches!(value, PropertyValue::Unicode(value) if value.buffer().is_empty()));
     }
 }
