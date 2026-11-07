@@ -256,11 +256,11 @@ where
                 AttachmentMethod::ByValue => {
                     let binary_data = match properties
                         .get(0x3701)
-                        .ok_or(MessagingError::AttachmentMessageObjectDataNotFound)?
+                        .ok_or(MessagingError::AttachmentFileBinaryDataNotFound)?
                     {
                         PropertyValue::Binary(value) => value,
                         invalid => {
-                            return Err(MessagingError::InvalidMessageObjectData(
+                            return Err(MessagingError::InvalidAttachmentFileBinaryData(
                                 PropertyType::from(invalid),
                             )
                             .into())
@@ -304,11 +304,11 @@ where
                 AttachmentMethod::Storage => {
                     let object_data = match properties
                         .get(0x3701)
-                        .ok_or(MessagingError::AttachmentMessageObjectDataNotFound)?
+                        .ok_or(MessagingError::AttachmentStorageObjectDataNotFound)?
                     {
                         PropertyValue::Object(value) => value,
                         invalid => {
-                            return Err(MessagingError::InvalidMessageObjectData(
+                            return Err(MessagingError::InvalidStorageObjectData(
                                 PropertyType::from(invalid),
                             )
                             .into())
