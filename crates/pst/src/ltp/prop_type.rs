@@ -102,6 +102,7 @@ impl TryFrom<u16> for PropertyType {
             0x0007 => Ok(Self::FloatingTime),
             0x000A => Ok(Self::ErrorCode),
             0x000B => Ok(Self::Boolean),
+            0x000D => Ok(Self::Object),
             0x0014 => Ok(Self::Integer64),
             0x001E => Ok(Self::String8),
             0x001F => Ok(Self::Unicode),
