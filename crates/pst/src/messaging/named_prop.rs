@@ -437,7 +437,8 @@ impl NamedPropertyMapProperties {
                 let mut results = Vec::new();
                 let mut cursor = Cursor::new(value.buffer());
                 while let Ok(value) = StringEntry::read(&mut cursor) {
-                    let padding = ((i64::from(value.size()) + 3) / 4) * 4;
+                    // Each length and string pair ends on a 4-byte boundary.
+                    let padding = (4 - i64::from(value.size() % 4)) % 4;
                     results.push(value);
 
                     if padding > 0 && cursor.seek(SeekFrom::Current(padding)).is_err() {
